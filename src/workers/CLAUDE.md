@@ -66,8 +66,8 @@ Each bubble is sampled via a 5×5 grid within `SAMPLE_PAD=20px` expansion around
 Known limitation: classification can fail for ambiguous backgrounds (deferred).
 
 ### Speech bubble path — white rect
-1. Paint tight text rect (tx1,ty1 → tx2,ty2) white (255,255,255,255) in `outData`
-2. `scanBubbleBounds` → full bubble interior bounds (pixel coords)
+1. `scanBubbleBounds` → full bubble interior bounds (pixel coords)
+2. Paint full bubble interior (bx,by → bx2,by2) white (255,255,255,255) in `outData` — covers all text even if tight rect underestimates
 3. Convert to percentage-based rect → added to `expandedRects` in response
 
 ### `scanBubbleBounds()`

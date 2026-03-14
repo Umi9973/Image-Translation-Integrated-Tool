@@ -47,6 +47,8 @@ const SAMPLE_PAD    = 20    // px expansion around tight rect used for brightnes
 const DARK_THRESH  = 80
 const MAX_EXPAND   = 200
 const SCAN_SAMPLES = 9
+const WHITE_EXPAND = 7   // px to expand tight text rect when painting white
+const MIN_MARGIN   = 4   // only expand a side if bubble border is at least this far away
 
 function scanBubbleBounds(
   pixels: Uint8ClampedArray,
@@ -367,17 +369,22 @@ async function processAll(
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
 
     if (routes[i] === 'white') {
-      // ── Speech bubble → paint tight text rect white ──
+      // ── Speech bubble → paint white ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
-      for (let y = ty1; y <= ty2; y++) {
-        for (let x = tx1; x <= tx2; x++) {
+      // Scan full bubble interior first so we know the clearance on each side.
+      const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
+      // Expand each side by WHITE_EXPAND only if there's enough room before the border.
+      const px1 = (tx1 - bx)  >= WHITE_EXPAND + MIN_MARGIN ? tx1 - WHITE_EXPAND : tx1
+      const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
+      const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
+      const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
+      for (let y = py1; y <= py2; y++) {
+        for (let x = px1; x <= px2; x++) {
           const idx = (y * W + x) * 4
           outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
         }
       }
-      // Scan full bubble interior and report as percentage-based expanded rect
-      const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
       expandedRects.push({
         id: b.id,
         rect: {
