@@ -13,6 +13,7 @@
     "vite": "^6.3.5"
   },
   "dependencies": {
+    "budoux": "^0.8.0",
     "dexie": "^4.0.11",
     "onnxruntime-web": "^1.24.2"
   }

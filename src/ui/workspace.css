@@ -255,6 +255,19 @@
 .ws-preview-btn:hover { background: #6272a4; }
 .ws-preview-btn.is-active { background: #6272a4; border-color: #bd93f9; }
 
+.ws-download-btn {
+  padding: 7px 16px;
+  background: #276749;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-download-btn:hover:not(:disabled) { background: #1c4532; }
+.ws-download-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* ── Preview mode — hide selection overlay and panel ─────────────────── */
 
 .ws-preview-mode .ws-bubble-overlay { display: none; }
@@ -349,6 +362,17 @@
 }
 .ws-bubble-item:hover .ws-delete-btn { opacity: 1; }
 .ws-delete-btn:hover { background: rgba(229, 62, 62, 0.2); color: #fc8181; }
+
+.ws-dot-clip-warn {
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #744210;
+  color: #fbd38d;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 
 /* State badges */
 .ws-badge {

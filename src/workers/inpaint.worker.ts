@@ -142,7 +142,8 @@ function scalePixels(
   dstW: number, dstH: number,
 ): Uint8ClampedArray {
   const srcCanvas = new OffscreenCanvas(srcW, srcH)
-  srcCanvas.getContext('2d')!.putImageData(new ImageData(pixels, srcW, srcH), 0, 0)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  srcCanvas.getContext('2d')!.putImageData(new ImageData(pixels as any, srcW, srcH), 0, 0)
   const dstCanvas = new OffscreenCanvas(dstW, dstH)
   dstCanvas.getContext('2d')!.drawImage(srcCanvas, 0, 0, dstW, dstH)
   return dstCanvas.getContext('2d')!.getImageData(0, 0, dstW, dstH).data

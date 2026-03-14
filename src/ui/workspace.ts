@@ -4,7 +4,7 @@ import { detectBubbles } from '../pipeline/detect'
 import { runOCR } from '../pipeline/ocr'
 import { loadAPIConfig, buildPrompt, translatePage, parseTranslationResponse } from '../pipeline/translate'
 import { inpaintPage } from '../pipeline/inpaint'
-import { renderTypeset } from '../pipeline/typeset'
+import { renderTypeset, renderTypesetToCanvas } from '../pipeline/typeset'
 import { openSettings } from './settings'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -508,6 +508,47 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     previewBtn.classList.toggle('is-active', on)
   })
 
+  const downloadBtn = document.createElement('button')
+  downloadBtn.type = 'button'
+  downloadBtn.className = 'ws-download-btn'
+  downloadBtn.textContent = '↓ Download'
+  downloadBtn.title = 'Download composited image (original + inpaint layer)'
+  controls.appendChild(downloadBtn)
+
+  downloadBtn.addEventListener('click', () => {
+    downloadBtn.disabled = true
+    try {
+      // Composite: original → inpaint overlay → typeset SVG
+      const W = img.naturalWidth
+      const H = img.naturalHeight
+      const canvas = document.createElement('canvas')
+      canvas.width  = W
+      canvas.height = H
+      const ctx = canvas.getContext('2d')!
+      ctx.drawImage(img, 0, 0)
+      ctx.drawImage(inpaintCanvas, 0, 0)
+
+      // Render typeset text directly onto canvas — preserves page-loaded fonts
+      if (typesetSvg.childElementCount > 0) {
+        renderTypesetToCanvas(bubbles, ctx, W, H)
+      }
+
+      canvas.toBlob(blob => {
+        if (!blob) return
+        const url  = URL.createObjectURL(blob)
+        const a    = document.createElement('a')
+        const base = page.filename.replace(/\.[^.]+$/, '')
+        a.href     = url
+        a.download = `${base}_translated.png`
+        a.click()
+        URL.revokeObjectURL(url)
+        downloadBtn.disabled = false
+      }, 'image/png')
+    } catch {
+      downloadBtn.disabled = false
+    }
+  })
+
   const statusEl = document.createElement('span')
   statusEl.className = 'ws-detect-status'
   controls.appendChild(statusEl)
@@ -861,7 +902,19 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   // ── Typeset All button ─────────────────────────────────────────────────────
 
   typesetBtn.addEventListener('click', () => {
-    renderTypeset(bubbles, typesetSvg)
+    const clippedIds = renderTypeset(bubbles, typesetSvg)
     statusEl.textContent = `Typeset ${bubbles.filter(b => b.translated_zh.trim()).length} bubbles`
+
+    // Clear previous dot-clip warnings, then re-add for newly clipped bubbles
+    bubbleList.querySelectorAll('.ws-dot-clip-warn').forEach(el => el.remove())
+    for (const id of clippedIds) {
+      const item = bubbleList.querySelector<HTMLElement>(`[data-id="${id}"]`)
+      if (!item) continue
+      const warn = document.createElement('span')
+      warn.className = 'ws-dot-clip-warn'
+      warn.title = 'Some dots were clipped — too many to fit in bubble'
+      warn.textContent = '⚠ dots clipped'
+      item.appendChild(warn)
+    }
   })
 }
