@@ -1,0 +1,19 @@
+{
+  "name": "mangavibe",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  },
+  "dependencies": {
+    "dexie": "^4.0.11",
+    "onnxruntime-web": "^1.24.2"
+  }
+}

@@ -1,0 +1,454 @@
+/* ── Workspace shell ──────────────────────────────────────────────────── */
+
+.ws-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Topbar ───────────────────────────────────────────────────────────── */
+
+.ws-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ws-topbar-brand {
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--accent);
+}
+
+.ws-topbar-filename {
+  flex: 1;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-settings-btn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
+.ws-settings-btn:hover { background: var(--border); color: var(--text); }
+
+.ws-new-btn {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
+.ws-new-btn:hover { background: var(--border); }
+
+/* ── Content row ──────────────────────────────────────────────────────── */
+
+.ws-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Image viewer (left) ──────────────────────────────────────────────── */
+
+.ws-viewer {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 16px;
+  overflow: auto;
+  gap: 12px;
+}
+
+/*
+ * .ws-image-frame is the positioning context for the SVG overlay.
+ * display: inline-flex causes it to shrink-wrap the <img> exactly,
+ * so the SVG overlay covers the image and nothing more.
+ */
+.ws-image-frame {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.ws-image-frame img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 52px - 60px);
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+}
+
+/* Typeset SVG overlay — Chinese text layer above inpaint, below selection SVG */
+.ws-typeset-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Inpaint canvas overlay — transparent layer above image, below SVG */
+.ws-inpaint-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* SVG overlay — exact same size as the image */
+.ws-bubble-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Bubble rects inside the SVG */
+.ws-bubble-rect {
+  pointer-events: all;
+  cursor: pointer;
+  fill: rgba(124, 92, 252, 0.12);
+  stroke: rgba(124, 92, 252, 0.7);
+  transition: fill 0.12s;
+}
+.ws-bubble-rect:hover { fill: rgba(124, 92, 252, 0.28); }
+.ws-bubble-rect.is-selected {
+  fill: rgba(237, 137, 54, 0.22);
+  stroke: #ed8936;
+  cursor: move;
+}
+
+.ws-handle-arrow {
+  fill: #ed8936;
+  stroke: #ed8936;
+  stroke-width: 0.3;
+  paint-order: stroke fill;
+  pointer-events: all;
+  user-select: none;
+  font-weight: bold;
+}
+
+/* Controls row below the image */
+.ws-viewer-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ws-detect-btn {
+  padding: 7px 16px;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-detect-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.ws-ocr-btn {
+  padding: 7px 16px;
+  background: #2b6cb0;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-ocr-btn:hover:not(:disabled) { background: #2c5282; }
+.ws-ocr-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-translate-btn {
+  padding: 7px 16px;
+  background: #276749;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-translate-btn:hover:not(:disabled) { background: #22543d; }
+.ws-translate-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-copy-prompt-btn,
+.ws-paste-btn {
+  padding: 7px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.ws-copy-prompt-btn:hover:not(:disabled),
+.ws-paste-btn:hover:not(:disabled) { background: var(--border); }
+.ws-copy-prompt-btn:disabled,
+.ws-paste-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-inpaint-btn {
+  padding: 7px 16px;
+  background: #975a16;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-inpaint-btn:hover:not(:disabled) { background: #744210; }
+.ws-inpaint-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-typeset-btn {
+  padding: 7px 16px;
+  background: #2c7a7b;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-typeset-btn:hover:not(:disabled) { background: #285e61; }
+.ws-typeset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-preview-btn {
+  padding: 7px 16px;
+  background: #44475a;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-preview-btn:hover { background: #6272a4; }
+.ws-preview-btn.is-active { background: #6272a4; border-color: #bd93f9; }
+
+/* ── Preview mode — hide selection overlay and panel ─────────────────── */
+
+.ws-preview-mode .ws-bubble-overlay { display: none; }
+.ws-preview-mode .ws-panel { display: none; }
+
+.ws-detect-status {
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+
+/* ── Bubble panel (right) ─────────────────────────────────────────────── */
+
+.ws-panel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ws-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ws-panel-title { font-weight: 600; font-size: 0.9375rem; }
+
+.ws-panel-count {
+  background: var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* Bubble list */
+.ws-bubble-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ws-bubble-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.ws-bubble-item:hover { background: var(--bg); }
+.ws-bubble-item.is-selected {
+  background: var(--bg);
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+}
+
+.ws-bubble-num {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  min-width: 26px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ws-bubble-preview {
+  flex: 1;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-delete-btn {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.ws-bubble-item:hover .ws-delete-btn { opacity: 1; }
+.ws-delete-btn:hover { background: rgba(229, 62, 62, 0.2); color: #fc8181; }
+
+/* State badges */
+.ws-badge {
+  font-size: 0.6875rem;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ws-badge--detected   { background: #2d3748; color: #a0aec0; }
+.ws-badge--ocr_done   { background: #1a365d; color: #63b3ed; }
+.ws-badge--translated { background: #1c4532; color: #68d391; }
+.ws-badge--reviewed   { background: #3c2800; color: #f6ad55; }
+
+/* ── Bubble editor ────────────────────────────────────────────────────── */
+
+.ws-editor {
+  border-top: 2px solid var(--border);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ws-editor-empty {
+  border-top: 2px solid var(--border);
+  padding: 20px 14px;
+  color: var(--text-dim);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.ws-editor-label {
+  font-size: 0.6875rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ws-editor-textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: 0.875rem;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: inherit;
+  line-height: 1.4;
+  min-height: 48px;
+  box-sizing: border-box;
+}
+.ws-editor-textarea:focus { outline: none; border-color: var(--accent); }
+.ws-editor-textarea[readonly] { opacity: 0.55; cursor: default; }
+
+/* Nav row */
+.ws-editor-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ws-nav-btn {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.ws-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ws-editor-pos {
+  flex: 1;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+}
+
+/* Actions row */
+.ws-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ws-lock-btn {
+  margin-left: auto;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.ws-lock-btn:hover { background: var(--border); }
