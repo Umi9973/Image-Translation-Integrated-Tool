@@ -559,64 +559,6 @@ function processBlk(
   }).concat((() => { console.log('[detect]', { beforeNMS: boxes.length, afterNMS: kept.length, boxes: dbg }); return [] })())
 }
 
-// ── Fragment merge ────────────────────────────────────────────────────────────
-
-/**
- * Merge nearby boxes that are likely fragments of the same speech bubble.
- * YOLO sometimes fires multiple small adjacent boxes on a single bubble's text
- * (e.g. one text column detected separately from the rest of the same bubble).
- *
- * Criterion: merge A and B when  union_area / (area_A + area_B) < MERGE_AREA_RATIO.
- *   - Fragments of the same bubble → compact union → low ratio (≈ 1.1–1.3)
- *   - Genuinely separate bubbles with a real gap → large empty union → high ratio
- *
- * Threshold 1.5 means the gap must be < the width of the smaller box for
- * equally-sized boxes, which is tight enough to avoid merging well-separated bubbles.
- *
- * Runs before deduplication, iteratively until stable.
- */
-const MERGE_AREA_RATIO = 1.5
-
-function mergeFragments(bubbles: MangaBubble[]): MangaBubble[] {
-  let current = [...bubbles]
-  let changed = true
-
-  while (changed) {
-    changed = false
-    const consumed = new Set<number>()
-    const result: MangaBubble[] = []
-
-    for (let i = 0; i < current.length; i++) {
-      if (consumed.has(i)) continue
-      let r = { ...current[i].rect }
-
-      for (let j = i + 1; j < current.length; j++) {
-        if (consumed.has(j)) continue
-        const b = current[j].rect
-
-        const ux  = Math.min(r.x, b.x)
-        const uy  = Math.min(r.y, b.y)
-        const ux2 = Math.max(r.x + r.w, b.x + b.w)
-        const uy2 = Math.max(r.y + r.h, b.y + b.h)
-        const unionArea = (ux2 - ux) * (uy2 - uy)
-        const sumArea   = r.w * r.h + b.w * b.h
-
-        if (sumArea > 0 && unionArea / sumArea < MERGE_AREA_RATIO) {
-          r = { x: ux, y: uy, w: ux2 - ux, h: uy2 - uy }
-          consumed.add(j)
-          changed = true
-        }
-      }
-
-      result.push({ ...current[i], rect: r })
-    }
-
-    current = result
-  }
-
-  return current
-}
-
 // ── Post-split deduplication ──────────────────────────────────────────────────
 
 /**
@@ -711,12 +653,12 @@ self.onmessage = async (e: MessageEvent) => {
     const maskData = maskOut ? (maskOut.data as Float32Array) : null
     const maskW    = maskOut ? maskOut.dims[maskOut.dims.length - 1] : 0
 
-    const bubbles = deduplicateBubbles(mergeFragments(processBlk(
+    const bubbles = deduplicateBubbles(processBlk(
       blk.data as Float32Array,
       blk.dims,
       scale, dw, dh, origW, origH,
       maskData, maskW,
-    )))
+    ))
 
     self.postMessage({ type: 'result', bubbles })
   } catch (err) {
