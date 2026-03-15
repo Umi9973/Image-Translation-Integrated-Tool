@@ -184,11 +184,15 @@ function packChunks(
           cols.push(chunk)
         }
       } else {
-        // Regular chunk longer than a full column — must hard-split it
+        // Regular chunk longer than a full column — must hard-split it.
+        // Never split immediately before a sentence-final particle so that
+        // e.g. "是吗" stays together even when "是" is the last char of a slice.
         let rem = chunk
         while (rem.length > charsPerCol) {
-          cols.push(rem.slice(0, charsPerCol))
-          rem = rem.slice(charsPerCol)
+          let splitAt = charsPerCol
+          if (splitAt < rem.length && PARTICLES.has(rem[splitAt])) splitAt++
+          cols.push(rem.slice(0, splitAt))
+          rem = rem.slice(splitAt)
         }
         col = rem
       }

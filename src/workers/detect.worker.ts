@@ -49,8 +49,13 @@ const MIN_VOTE_FRAC    = 0.20 // fraction of slices that must agree on a gap
 //      High perpendicular overlap means both clusters sit in the same column/row → one bubble.
 // This catches single bubbles whose large inter-line gap was mistaken for a seam.
 
-const SEAM_GAP_FRAC     = 0.20  // reject split if text-cluster gap < 20% of total box (was 0.08)
-const SEAM_OVERLAP_FRAC = 0.80  // reject split if perpendicular-axis overlap >= 80% of narrower cluster
+const SEAM_GAP_FRAC     = 0.20  // seamX only: reject if text-cluster gap < 20% of total box width
+const SEAM_OVERLAP_FRAC = 0.80  // seamX only: reject if Y-overlap >= 80% of narrower cluster
+
+// seamY-specific thresholds (projection-based, different geometry from seamX)
+const SEAM_Y_VALLEY_FRAC     = 0.15  // band avg ≤ 15% of weaker half's avg density (relative)
+const SEAM_Y_VALLEY_ABS_FRAC = 0.03  // per-row: ≤ 3% of box width counts as "near-zero"
+const SEAM_Y_MIN_BAND_FRAC   = 0.05  // gap band must span ≥ 5% of text extent (filters char gaps)
 
 // ── Singleton session ─────────────────────────────────────────────────────────
 
@@ -137,17 +142,28 @@ async function preprocess(blob: Blob): Promise<Preprocessed> {
 // ── Double-bubble seam detector ───────────────────────────────────────────────
 
 /**
- * Per-column largest-gap analysis on the model segmentation mask.
+ * Horizontal projection profile for top-bottom double-bubble detection.
  *
- * For each X column inside the YOLO box:
- *   1. Walk all rows top→bottom, recording gaps between consecutive text runs.
- *   2. Find the LARGEST gap whose centre falls in the middle 20–80% of the box.
- *   3. The gap must be ≥ MIN_GAP_FRAC × boxH (absolute size filter).
- *   4. The gap must be ≥ MIN_DOMINANCE × second-largest gap (uniqueness filter).
- *      This rejects single bubbles where all inter-char gaps are similar in size.
- *   5. Columns that pass both filters vote for a split at their largest-gap centre.
+ * Why not the same per-column gap voting as findSeamX:
+ *   For vertical Japanese text, each text column spans the full height of its
+ *   bubble. In a left-right double bubble, every row sees text from both sides
+ *   → nearly all rows vote in findSeamX. But in a top-bottom double bubble,
+ *   each X column only passes through ONE bubble's text (they don't overlap
+ *   vertically), so almost no columns vote in the per-column approach.
  *
- * If ≥ MIN_VOTE_FRAC of columns vote, the median vote is the seam Y.
+ * Instead, compute a per-row density (total text pixels across all columns).
+ * A real inter-bubble gap produces rows with near-zero density regardless of
+ * whether the two bubbles' text columns share the same X positions.
+ *
+ * False-positive guards:
+ *   1. Anchor quarters to the actual TEXT EXTENT, not the YOLO box edges.
+ *      This prevents YOLO padding (empty oval space above/below text) from
+ *      creating a false valley when text only fills part of the box height.
+ *   2. Both quarters must have substantial text density (≥ 1 px average).
+ *   3. Valley must pass BOTH a relative threshold (≤ SEAM_Y_VALLEY_FRAC of
+ *      the weaker half's average) AND an absolute threshold (≤ 3% of box
+ *      width in text pixels). A real gap has ~0 pixels; a single-bubble
+ *      density taper still has pixels from the remaining active columns.
  */
 function findSeamY(
   maskData: Float32Array,
@@ -166,55 +182,80 @@ function findSeamY(
   const boxW = ix2 - ix1
   if (boxH < 20 || boxW <= 0) return null
 
-  const marginLo  = iy1 + Math.round(boxH * 0.20)
-  const marginHi  = iy2 - Math.round(boxH * 0.20)
-  const minGapRows = boxH * MIN_GAP_FRAC
-
-  const gapCenters: number[] = []
-
-  for (let col = ix1; col <= ix2; col++) {
-    // Collect all gaps between text runs in this column
-    const gaps: { size: number; center: number }[] = []
-    let prevTextEnd = -1
-
-    for (let row = iy1; row <= iy2; row++) {
-      if (maskData[row * maskW + col] > MASK_TEXT_THRESH) {
-        if (prevTextEnd >= 0) {
-          const gapSize   = row - prevTextEnd - 1
-          const gapCenter = (prevTextEnd + row) / 2
-          if (gapSize > 0 && gapCenter >= marginLo && gapCenter <= marginHi) {
-            gaps.push({ size: gapSize, center: gapCenter })
-          }
-        }
-        prevTextEnd = row
-      }
+  // Horizontal projection: count text-pixel columns in each row.
+  const density = new Float32Array(boxH + 1)
+  for (let row = iy1; row <= iy2; row++) {
+    let n = 0
+    for (let col = ix1; col <= ix2; col++) {
+      if (maskData[row * maskW + col] > MASK_TEXT_THRESH) n++
     }
-
-    if (gaps.length === 0) continue
-
-    // Sort largest first
-    gaps.sort((a, b) => b.size - a.size)
-    const largest    = gaps[0]
-    const secondSize = gaps[1]?.size ?? 0
-
-    // Absolute size filter
-    if (largest.size < minGapRows) continue
-
-    // Dominance filter: largest must be clearly bigger than all others
-    if (secondSize > 0 && largest.size < secondSize * MIN_DOMINANCE) continue
-
-    gapCenters.push(largest.center)
+    density[row - iy1] = n
   }
 
-  // Need enough columns agreeing on a gap
-  if (gapCenters.length < boxW * MIN_VOTE_FRAC) return null
+  // Find the actual text extent — trim empty YOLO-box padding from both ends.
+  // This prevents the empty oval space above/below the text region from being
+  // mistaken for gap rows.
+  let firstRow = -1, lastRow = -1
+  for (let i = 0; i <= boxH; i++) {
+    if (density[i] > 0) {
+      if (firstRow === -1) firstRow = i
+      lastRow = i
+    }
+  }
+  if (firstRow === -1) return null
+  const textH = lastRow - firstRow
+  if (textH < 20) return null
 
-  // Seam = median vote, converted to original image coords
-  gapCenters.sort((a, b) => a - b)
-  const seamMaskY = gapCenters[Math.floor(gapCenters.length / 2)]
+  // Quarter averages anchored to text extent (not YOLO box edges).
+  const qH = Math.max(1, Math.round(textH * 0.25))
+  let topSum = 0
+  for (let i = firstRow; i < firstRow + qH; i++) topSum += density[i]
+  let botSum = 0
+  for (let i = lastRow + 1 - qH; i <= lastRow; i++) botSum += density[i]
+  const topAvg = topSum / qH
+  const botAvg = botSum / qH
+  // Both halves must actually contain text.
+  if (topAvg < 1 || botAvg < 1) return null
+
+  const refDensity = Math.min(topAvg, botAvg)
+
+  // Find the WIDEST contiguous near-zero band in the middle 20–80% of the
+  // TEXT EXTENT. A real inter-bubble gap spans many rows continuously.
+  // DBNet inter-character gaps are only 1–2 rows wide and are filtered out
+  // by the minimum band length requirement.
+  const midLo       = firstRow + Math.round(textH * 0.20)
+  const midHi       = firstRow + Math.round(textH * 0.80)
+  const valleyAbs   = Math.max(1, Math.round(boxW * SEAM_Y_VALLEY_ABS_FRAC))
+  const minBandRows = Math.max(3, Math.round(textH * SEAM_Y_MIN_BAND_FRAC))
+
+  let bestLen = 0, bestCenter = -1, bestAvg = Infinity
+  let runStart = -1, runSum = 0
+
+  for (let i = midLo; i <= midHi + 1; i++) {
+    const inBand = i <= midHi && density[i] <= valleyAbs
+    if (inBand) {
+      if (runStart === -1) { runStart = i; runSum = 0 }
+      runSum += density[i]
+    } else if (runStart !== -1) {
+      const len = i - runStart
+      if (len >= minBandRows && len > bestLen) {
+        bestLen    = len
+        bestCenter = runStart + Math.floor(len / 2)
+        bestAvg    = runSum / len
+      }
+      runStart = -1
+    }
+  }
+  if (bestCenter < 0) return null
+
+  // Average density within the band must also be ≤ 15% of weaker half.
+  if (bestAvg > refDensity * SEAM_Y_VALLEY_FRAC) return null
+
+  // Convert seam row to original image coords.
+  const seamMaskY = iy1 + bestCenter
   const seamOrigY = (seamMaskY - dh) / scale
 
-  // Both resulting halves must be tall enough
+  // Both resulting halves must be tall enough.
   const origY1 = Math.max(0,     (iy1 - dh) / scale)
   const origY2 = Math.min(origH, (iy2 - dh) / scale)
   if (seamOrigY - origY1 < SPLIT_MIN_H || origY2 - seamOrigY < SPLIT_MIN_H) return null
@@ -402,11 +443,13 @@ function processBlk(
     if (ox2 <= ox1 || oy2 <= oy1) return []
 
     // Check for a double-bubble seam (top-bottom first, then left-right).
+    // Guard on the dimension being split: seamY needs HEIGHT ≥ 2×SPLIT_MIN_H,
+    // seamX needs WIDTH ≥ 2×SPLIT_MIN_H.
     const minSplitDim = SPLIT_MIN_H * 2
-    const seamY = (maskData && (ox2 - ox1) >= minSplitDim)
+    const seamY = (maskData && (oy2 - oy1) >= minSplitDim)
       ? findSeamY(maskData, maskW, x1, y1, x2, y2, scale, dh, origH)
       : null
-    const seamX = (!seamY && maskData && (oy2 - oy1) >= minSplitDim)
+    const seamX = (!seamY && maskData && (ox2 - ox1) >= minSplitDim)
       ? findSeamX(maskData, maskW, x1, y1, x2, y2, scale, dw, origW)
       : null
 
@@ -427,15 +470,14 @@ function processBlk(
         t2: t2 ? { x1: +t2[0].toFixed(1), y1: +t2[1].toFixed(1), x2: +t2[2].toFixed(1), y2: +t2[3].toFixed(1) } : null,
       }
 
+      // For a Y-seam, X-overlap of tight rects is always high for stacked
+      // bubbles (same horizontal span) — not a useful FP indicator here.
+      // Only revert if tightened rects overlap vertically, meaning
+      // tightenToMask found no real separation between the two halves.
       const isFalsePositive = t1 !== null && t2 !== null && (() => {
-        const totalH        = oy2 - oy1
-        const gapH          = t2[1] - t1[3]
-        const xOverlap      = Math.max(0, Math.min(t1[2], t2[2]) - Math.max(t1[0], t2[0]))
-        const minW          = Math.min(t1[2] - t1[0], t2[2] - t2[0])
-        const xOverlapRatio = minW > 0 ? xOverlap / minW : 0
-        const gapRatio      = gapH / totalH
-        const result        = gapRatio < SEAM_GAP_FRAC && xOverlapRatio >= SEAM_OVERLAP_FRAC
-        boxDbg.fp_check = { gapRatio: +gapRatio.toFixed(3), gapThresh: SEAM_GAP_FRAC, xOverlapRatio: +xOverlapRatio.toFixed(3), overlapThresh: SEAM_OVERLAP_FRAC, result }
+        const gapH   = t2[1] - t1[3]
+        const result = gapH <= 0
+        boxDbg.fp_check = { gapH: +gapH.toFixed(1), result }
         return result
       })()
 

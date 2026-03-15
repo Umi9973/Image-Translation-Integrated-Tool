@@ -19,11 +19,13 @@ Workers exist to offload heavy ML tasks off the main thread so the UI never free
 
 ### Post-processing pipeline
 1. **NMS** on raw YOLO boxes (IOU_THRESH=0.3, CONF_THRESH=0.45)
-2. **`findSeamY` / `findSeamX`**: per-column/row gap analysis on the mask to detect double bubbles; dominance + vote filters; minimum box dimension guard (≥80px)
+2. **`findSeamY` / `findSeamX`**: gap analysis on the mask to detect double bubbles; minimum box dimension guard (height ≥ 80px for seamY, width ≥ 80px for seamX — these must not be swapped)
+   - **`findSeamX`** (left/right split): per-row vote — counts how many rows have a dark column gap; needs `MIN_VOTE_FRAC=0.20` of rows to agree. Works because vertical text columns span the full height so every row sees both sides.
+   - **`findSeamY`** (top/bottom split): horizontal projection profile — for each row counts text-pixel columns; finds actual text extent (trims YOLO box padding); computes quarter averages anchored to text extent; finds the **widest contiguous near-zero band** in the middle 40–80% of the text extent where per-row density ≤ `SEAM_Y_VALLEY_ABS_FRAC` (3% of box width) AND band is ≥ `SEAM_Y_MIN_BAND_FRAC` (5% of text height) rows AND band average ≤ `SEAM_Y_VALLEY_FRAC` (15%) of the weaker half's average. The widest-band requirement distinguishes real inter-bubble gaps (10+ rows) from DBNet inter-character gaps (1–2 rows). Per-column voting fails for stacked bubbles because both bubbles share the same X positions — no column sees text from two different vertical positions.
 3. **`tightenToMask`**: shrink each half-box (or whole box) to the tight bounding rect of mask text-pixels — this is what gets stored in `MangaBubble.rect`
-4. **False-positive split rejection**: after tightening, if the gap between the two text clusters is < `SEAM_GAP_FRAC` (20%) of total box dimension AND the perpendicular-axis overlap between the two text clusters is ≥ `SEAM_OVERLAP_FRAC` (80%) → reject the split, treat as single bubble
-   - seamY (horizontal cut): checks X-overlap ratio between t1 and t2
-   - seamX (vertical cut): checks Y-overlap ratio between t1 and t2
+4. **False-positive split rejection**: after tightening:
+   - seamX: if gap between text clusters < `SEAM_GAP_FRAC` (20%) of box width AND Y-overlap ≥ `SEAM_OVERLAP_FRAC` (80%) → reject split
+   - seamY: revert only if the two tightened text rects actually **overlap vertically** (`gapH <= 0`). Do NOT use X-overlap as discriminator — stacked bubbles always share the same horizontal span, so X-overlap would always fire and reject real splits.
 5. **`deduplicateBubbles`**: three-pass —
    - Pass 1 (wrapper): drop large box if 2+ smaller boxes are each ≥70% contained within it (spurious YOLO wrapper over individually-detected bubbles)
    - Pass 2 (containment): drop small bubble if ≥85% of its area is inside a single larger one
