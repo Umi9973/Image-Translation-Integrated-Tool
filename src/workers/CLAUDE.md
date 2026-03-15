@@ -35,13 +35,6 @@ Workers exist to offload heavy ML tasks off the main thread so the UI never free
 `MangaBubble.rect` stores the **tight text-pixel bounding box**, not the full bubble interior.
 Bubble border expansion (`scanBubbleBounds`) has been moved to `inpaint.worker.ts` and runs at inpaint time.
 
-### Stable base
-`detect.worker.ts.bak` — last known-good snapshot. Restore with:
-```bash
-cp src/workers/detect.worker.ts.bak src/workers/detect.worker.ts
-```
-**Update `.bak` after every confirmed-working milestone** — ask Claude to do it explicitly.
-
 ## ocr.worker.ts — Model Details
 - Models: `l0wgear/manga-ocr-2025-onnx` on HuggingFace (encoder ~22 MB, decoder ~118 MB, cached after first load)
 - Architecture: ViT encoder (`encoder_model.onnx`) + BERT-based autoregressive decoder (`decoder_model.onnx`)
@@ -85,13 +78,6 @@ Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at lumi
 7. Paste only masked pixels (bounds region) into `outData` — context pixels are discarded
 
 Output: transparent PNG overlay — white tight rects where speech bubbles were, LaMa-reconstructed pixels where background text was.
-
-### Stable base
-`inpaint.worker.ts.bak` — last known-good snapshot. Restore with:
-```bash
-cp src/workers/inpaint.worker.ts.bak src/workers/inpaint.worker.ts
-```
-**Update `.bak` after every confirmed-working milestone** — ask Claude to do it explicitly.
 
 ## Rules
 - Workers communicate via `postMessage` / `onmessage` only — no shared state.
