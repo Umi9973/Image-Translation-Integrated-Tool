@@ -56,6 +56,7 @@ const SEAM_OVERLAP_FRAC = 0.80  // seamX only: reject if Y-overlap >= 80% of nar
 const SEAM_Y_VALLEY_FRAC     = 0.15  // band avg ≤ 15% of weaker half's avg density (relative)
 const SEAM_Y_VALLEY_ABS_FRAC = 0.03  // per-row: ≤ 3% of box width counts as "near-zero"
 const SEAM_Y_MIN_BAND_FRAC   = 0.05  // gap band must span ≥ 5% of text extent (filters char gaps)
+const SEAM_Y_MIN_GAP_FRAC    = 0.04  // FP check: tight-rect gap must be ≥ 4% of YOLO box height
 
 // ── Singleton session ─────────────────────────────────────────────────────────
 
@@ -476,8 +477,9 @@ function processBlk(
       // tightenToMask found no real separation between the two halves.
       const isFalsePositive = t1 !== null && t2 !== null && (() => {
         const gapH   = t2[1] - t1[3]
-        const result = gapH <= 0
-        boxDbg.fp_check = { gapH: +gapH.toFixed(1), result }
+        const minGap = (oy2 - oy1) * SEAM_Y_MIN_GAP_FRAC
+        const result = gapH < minGap
+        boxDbg.fp_check = { gapH: +gapH.toFixed(1), minGap: +minGap.toFixed(1), result }
         return result
       })()
 
