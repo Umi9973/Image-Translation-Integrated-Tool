@@ -18,12 +18,6 @@ Unlike "Readers" (e.g., Mokuro), this is an **Editor** designed for scanlation w
 - **Local Storage:** Use **IndexedDB (via Dexie.js)** for project management and **OPFS** for high-performance image caching.
 - **BYOK (Bring Your Own Key):** API key stored in browser `localStorage` (`mangavibe_api_config`). Supports OpenAI and DeepSeek (OpenAI-compatible endpoints). Anthropic excluded — no browser CORS support. Link-out mode available for users without an API account.
 
-## 🔒 Stable Base Policy
-- Every worker file that is actively being worked on must have a `.bak` snapshot (e.g. `detect.worker.ts.bak`).
-- **Never update `.bak` without explicit user instruction.**
-- After a confirmed-working milestone, remind the user: *"Should I update the .bak now?"*
-- Restore with: `cp src/workers/<file>.ts.bak src/workers/<file>.ts`
-
 ## 📜 Coding Rules & "The Vibe"
 - **State Sovereignty:** Every bubble is a unique object with states: `detected`, `ocr_done`, `translated`, `reviewed`.
 - **Human-in-the-Loop:** UI must allow editing at *every* stage (e.g., fix the OCR before paying for the Translation).

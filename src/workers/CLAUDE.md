@@ -25,7 +25,7 @@ Workers exist to offload heavy ML tasks off the main thread so the UI never free
 3. **`tightenToMask`**: shrink each half-box (or whole box) to the tight bounding rect of mask text-pixels — this is what gets stored in `MangaBubble.rect`
 4. **False-positive split rejection**: after tightening:
    - seamX: if gap between text clusters < `SEAM_GAP_FRAC` (20%) of box width AND Y-overlap ≥ `SEAM_OVERLAP_FRAC` (80%) → reject split
-   - seamY: revert only if the two tightened text rects actually **overlap vertically** (`gapH <= 0`). Do NOT use X-overlap as discriminator — stacked bubbles always share the same horizontal span, so X-overlap would always fire and reject real splits.
+   - seamY: revert if `gapH < SEAM_Y_MIN_GAP_FRAC × boxHeight` (i.e. tight-rect gap < 4% of YOLO box height). Real inter-bubble gaps are ≥ 4% of box height; DBNet inter-character spacing (3–8 px) is not. Do NOT use X-overlap as discriminator — stacked bubbles always share the same horizontal span, so X-overlap would always fire and reject real splits.
 5. **`deduplicateBubbles`**: three-pass —
    - Pass 1 (wrapper): drop large box if 2+ smaller boxes are each ≥70% contained within it (spurious YOLO wrapper over individually-detected bubbles)
    - Pass 2 (containment): drop small bubble if ≥85% of its area is inside a single larger one
