@@ -35,10 +35,16 @@ ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.2/di
 
 const MODEL_URL     = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx'
 const OPFS_FILENAME = 'lama_fp32.onnx'
-const LAMA_SIZE     = 512
-const LAMA_CTX_FRAC = 0.5   // context padding around background text for LaMa (fraction of max(w,h))
-const BG_PADDING    = 8     // px padding around tight text rect for LaMa bounds
-const SAMPLE_PAD    = 20    // px expansion around tight rect used for brightness sampling
+const LAMA_SIZE       = 512
+const LAMA_CTX_FRAC   = 0.5   // context padding around background text for LaMa (fraction of max(w,h))
+const BG_PADDING      = 8     // px padding around tight text rect for LaMa bounds
+
+const TEXT_LUM_THRESH  = 160  // pixels brighter than this inside the bounds are treated as text ink
+const BRIGHT_THRESH    = 200  // luminance above this = bright pixel
+const BRIGHT_MIN_RATIO = 0.50 // fraction of interior samples that must be bright to confirm speech bubble
+
+const SOLID_RING   = 12  // px wide sampling ring around text rect for solid-bg detection
+const SOLID_THRESH = 28  // max per-channel stddev — below this = solid/uniform background
 
 // ── Bubble boundary scanner ────────────────────────────────────────────────────
 // Used for speech bubbles only: expands the tight text rect outward until
@@ -91,35 +97,59 @@ function scanBubbleBounds(
 }
 
 // ── Background brightness check ───────────────────────────────────────────────
-// Samples a 5×5 grid inside bx/by/bx2/by2 but outside the tight text rect.
-// Returns true when the majority are bright → speech bubble.
-// Returns false when the background is dark/colored → background text on artwork.
-
-const BRIGHT_THRESH     = 200   // luminance above this = bright pixel
-const BRIGHT_MIN_RATIO  = 0.55  // fraction of samples that must be bright to confirm bubble
+// Samples a 5×5 grid INSIDE the tight text rect.
+// Speech bubbles have white backgrounds between strokes → high bright-ratio.
+// Background text sits on dark/colored artwork → low bright-ratio.
+// Sampling interior avoids being fooled by dark panel borders outside the bubble.
 
 function isBrightRegion(
   pixels: Uint8ClampedArray,
   W: number, H: number,
-  bx: number, by: number, bx2: number, by2: number,
   tx1: number, ty1: number, tx2: number, ty2: number,
 ): boolean {
-  const GRID = 5  // 5×5 sample grid
-  let bright = 0, total = 0
+  const GRID = 5
+  let bright = 0
   for (let gy = 0; gy < GRID; gy++) {
     for (let gx = 0; gx < GRID; gx++) {
-      const sx = Math.round(bx + (bx2 - bx) * (gx + 0.5) / GRID)
-      const sy = Math.round(by + (by2 - by) * (gy + 0.5) / GRID)
-      if (sx >= tx1 && sx <= tx2 && sy >= ty1 && sy <= ty2) continue  // skip text pixels
-      const xi = Math.max(0, Math.min(W - 1, sx))
-      const yi = Math.max(0, Math.min(H - 1, sy))
-      const b  = (yi * W + xi) * 4
+      const sx = Math.max(0, Math.min(W - 1, Math.round(tx1 + (tx2 - tx1) * (gx + 0.5) / GRID)))
+      const sy = Math.max(0, Math.min(H - 1, Math.round(ty1 + (ty2 - ty1) * (gy + 0.5) / GRID)))
+      const b  = (sy * W + sx) * 4
       const l  = pixels[b] * 0.299 + pixels[b + 1] * 0.587 + pixels[b + 2] * 0.114
       if (l > BRIGHT_THRESH) bright++
-      total++
     }
   }
-  return total > 0 && (bright / total) >= BRIGHT_MIN_RATIO
+  return (bright / (GRID * GRID)) >= BRIGHT_MIN_RATIO
+}
+
+// ── Solid background detection ────────────────────────────────────────────────
+// Samples a ring of pixels just outside the tight text rect.
+// If all channels have low stddev the background is uniform → fill with average color.
+// Returns { r, g, b, solid } — solid=false means complex artwork → fall through to LaMa.
+
+function sampleBorderColor(
+  pixels: Uint8ClampedArray,
+  W: number, H: number,
+  tx1: number, ty1: number, tx2: number, ty2: number,
+): { r: number; g: number; b: number; solid: boolean } {
+  const bx1 = Math.max(0, tx1 - SOLID_RING)
+  const by1 = Math.max(0, ty1 - SOLID_RING)
+  const bx2 = Math.min(W - 1, tx2 + SOLID_RING)
+  const by2 = Math.min(H - 1, ty2 + SOLID_RING)
+  const STEP = 4
+  const rs: number[] = [], gs: number[] = [], bs: number[] = []
+  for (let y = by1; y <= by2; y += STEP) {
+    for (let x = bx1; x <= bx2; x += STEP) {
+      if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue
+      const p = (y * W + x) * 4
+      rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
+    }
+  }
+  if (rs.length === 0) return { r: 0, g: 0, b: 0, solid: false }
+  const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
+  const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
+  const mr = mean(rs), mg = mean(gs), mb = mean(bs)
+  const solid = Math.max(stddev(rs, mr), stddev(gs, mg), stddev(bs, mb)) < SOLID_THRESH
+  return { r: Math.round(mr), g: Math.round(mg), b: Math.round(mb), solid }
 }
 
 // ── Pixel helpers ──────────────────────────────────────────────────────────────
@@ -175,6 +205,37 @@ async function saveToOpfs(buffer: ArrayBuffer): Promise<void> {
 
 let session: ort.InferenceSession | null = null
 
+async function downloadModel(): Promise<ArrayBuffer> {
+  const resp = await fetch(MODEL_URL)
+  if (!resp.ok) throw new Error(`Model fetch failed: ${resp.status} ${resp.statusText}`)
+  const contentLength = Number(resp.headers.get('content-length') ?? 0)
+  const reader = resp.body!.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    if (contentLength > 0) {
+      const pct = Math.round(received / contentLength * 100)
+      post({ type: 'progress', current: received, total: contentLength,
+        stage: `Downloading LaMa model… ${pct}% (208 MB, cached after first run)` })
+    }
+  }
+  const arr = new Uint8Array(received)
+  let off = 0
+  for (const chunk of chunks) { arr.set(chunk, off); off += chunk.length }
+  return arr.buffer
+}
+
+async function clearOpfsCache(): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory()
+    await root.removeEntry(OPFS_FILENAME)
+  } catch { /* already gone */ }
+}
+
 async function getSession(): Promise<ort.InferenceSession> {
   if (session) return session
 
@@ -182,32 +243,22 @@ async function getSession(): Promise<ort.InferenceSession> {
   let buffer = await loadFromOpfs()
 
   if (!buffer) {
-    const resp = await fetch(MODEL_URL)
-    if (!resp.ok) throw new Error(`Model fetch failed: ${resp.status} ${resp.statusText}`)
-    const contentLength = Number(resp.headers.get('content-length') ?? 0)
-    const reader = resp.body!.getReader()
-    const chunks: Uint8Array[] = []
-    let received = 0
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      chunks.push(value)
-      received += value.length
-      if (contentLength > 0) {
-        const pct = Math.round(received / contentLength * 100)
-        post({ type: 'progress', current: received, total: contentLength,
-          stage: `Downloading LaMa model… ${pct}% (208 MB, cached after first run)` })
-      }
-    }
-    const arr = new Uint8Array(received)
-    let off = 0
-    for (const chunk of chunks) { arr.set(chunk, off); off += chunk.length }
-    buffer = arr.buffer
+    buffer = await downloadModel()
     saveToOpfs(buffer)  // fire-and-forget
   }
 
   post({ type: 'progress', current: 0, total: 1, stage: 'Loading LaMa into ONNX runtime…' })
-  session = await ort.InferenceSession.create(buffer, { executionProviders: ['wasm'] })
+  try {
+    session = await ort.InferenceSession.create(buffer, { executionProviders: ['wasm'] })
+  } catch (err) {
+    // Cached file may be corrupted — clear it and retry with a fresh download
+    await clearOpfsCache()
+    post({ type: 'progress', current: 0, total: 1, stage: 'Cache invalid, re-downloading LaMa model…' })
+    buffer = await downloadModel()
+    saveToOpfs(buffer)
+    post({ type: 'progress', current: 0, total: 1, stage: 'Loading LaMa into ONNX runtime…' })
+    session = await ort.InferenceSession.create(buffer, { executionProviders: ['wasm'] })
+  }
   return session
 }
 
@@ -264,13 +315,28 @@ async function inpaintBackground(
   const rw  = rx2 - rx1
   const rh  = ry2 - ry1
 
-  // Rectangular mask: cover the bounds region within the crop
+  // Pixel-level mask: within the bounds, mask only bright (text) pixels.
+  // Since we're on the dark-background route, text ink is the bright outlier.
   const cropMask = new Uint8Array(rw * rh)
+  let maskedCount = 0
   for (let row = 0; row < rh; row++) {
     const gy = ry1 + row
     for (let col = 0; col < rw; col++) {
       const gx = rx1 + col
-      if (gx >= bx && gx <= bx2 && gy >= by && gy <= by2) cropMask[row * rw + col] = 255
+      if (gx < bx || gx > bx2 || gy < by || gy > by2) continue
+      const p   = (gy * W + gx) * 4
+      const lum = origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
+      if (lum > TEXT_LUM_THRESH) { cropMask[row * rw + col] = 255; maskedCount++ }
+    }
+  }
+  // Fallback: if threshold found almost nothing, use the full rectangle
+  if (maskedCount < (bw * bh) * 0.01) {
+    for (let row = 0; row < rh; row++) {
+      const gy = ry1 + row
+      for (let col = 0; col < rw; col++) {
+        const gx = rx1 + col
+        if (gx >= bx && gx <= bx2 && gy >= by && gy <= by2) cropMask[row * rw + col] = 255
+      }
     }
   }
 
@@ -340,21 +406,32 @@ async function processAll(
   // Output buffer — transparent; flood-fill writes white, LaMa writes reconstructed pixels
   const outData = new Uint8ClampedArray(W * H * 4)
 
-  // Route per bubble: sample around the tight text rect to decide.
-  // Bright surrounding region = speech bubble → paint rect white + scan full bounds.
-  // Dark/colored = background text on artwork → LaMa.
-  type Route = 'white' | 'lama'
-  const routes: Route[] = bubbles.map(b => {
+  // Route per bubble: sample 5×5 grid inside the tight text rect.
+  // Speech bubble interior is white behind the strokes → high bright ratio → white fill.
+  // Background text on artwork has dark/colored background → low bright ratio → LaMa.
+  type Route = 'white' | 'solid' | 'lama'
+  const dbg: object[] = []
+  const solidColors: Map<number, { r: number; g: number; b: number }> = new Map()
+  const routes: Route[] = bubbles.map((b, i) => {
     const tx1 = Math.floor((b.rect.x / 100) * W)
     const ty1 = Math.floor((b.rect.y / 100) * H)
     const tx2 = Math.ceil((b.rect.x + b.rect.w) / 100 * W)
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
-    const bx  = Math.max(0, tx1 - SAMPLE_PAD)
-    const by  = Math.max(0, ty1 - SAMPLE_PAD)
-    const bx2 = Math.min(W, tx2 + SAMPLE_PAD)
-    const by2 = Math.min(H, ty2 + SAMPLE_PAD)
-    return isBrightRegion(origPixels, W, H, bx, by, bx2, by2, tx1, ty1, tx2, ty2)
-      ? 'white' : 'lama'
+    const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
+    let route: Route
+    if (bright) {
+      route = 'white'
+    } else {
+      const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
+      if (border.solid) {
+        solidColors.set(i, border)
+        route = 'solid'
+      } else {
+        route = 'lama'
+      }
+    }
+    dbg.push({ id: b.id, rect_pct: b.rect, bright, route })
+    return route
   })
 
   let sess: ort.InferenceSession | null = null
@@ -373,7 +450,6 @@ async function processAll(
       // ── Speech bubble → paint white ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
-      // Scan full bubble interior first so we know the clearance on each side.
       const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
       // Expand each side by WHITE_EXPAND only if there's enough room before the border.
       const px1 = (tx1 - bx)  >= WHITE_EXPAND + MIN_MARGIN ? tx1 - WHITE_EXPAND : tx1
@@ -395,6 +471,21 @@ async function processAll(
           h: ((by2 - by) / H) * 100,
         },
       })
+    } else if (routes[i] === 'solid') {
+      // ── Solid background → fill with sampled color ──
+      post({ type: 'progress', current: i, total: bubbles.length,
+        stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
+      const { r, g, b } = solidColors.get(i)!
+      const fx1 = Math.max(0, tx1 - BG_PADDING)
+      const fy1 = Math.max(0, ty1 - BG_PADDING)
+      const fx2 = Math.min(W, tx2 + BG_PADDING)
+      const fy2 = Math.min(H, ty2 + BG_PADDING)
+      for (let y = fy1; y <= fy2; y++) {
+        for (let x = fx1; x <= fx2; x++) {
+          const idx = (y * W + x) * 4
+          outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+        }
+      }
     } else {
       // ── Background text → LaMa ──
       post({ type: 'progress', current: i, total: bubbles.length,
@@ -410,6 +501,7 @@ async function processAll(
   const outCanvas = new OffscreenCanvas(W, H)
   outCanvas.getContext('2d')!.putImageData(new ImageData(outData, W, H), 0, 0)
   const blob = await outCanvas.convertToBlob({ type: 'image/png' })
+  post({ type: 'debug', data: { bubbles: dbg } })
   return { blob, expandedRects }
 }
 

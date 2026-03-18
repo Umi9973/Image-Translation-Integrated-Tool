@@ -53,31 +53,37 @@ Model: `Carve/LaMa-ONNX/lama_fp32.onnx` (~208 MB). Fetched once, saved to OPFS (
 - **IN**: `{ type: 'inpaint', imageBlob: Blob, bubbles: Array<{id, rect: {x,y,w,h}}> }` — rect values percentage-based
 - **OUT done**: `{ type: 'done', resultBlob: Blob, expandedRects: Array<{id, rect}> }` — expandedRects only for speech bubble route, percentage-based full bubble interior
 
-### Routing — `isBrightRegion()`
-Each bubble is sampled via a 5×5 grid within `SAMPLE_PAD=20px` expansion around the tight text rect (excluding the text rect itself):
-- **Bright** (≥55% of samples have lum > 200) → `'white'` — speech bubble
-- **Dark / colored** → `'lama'` — background text on manga artwork
+### Routing — three-way classification
+1. **`isBrightRegion()`** — samples a 5×5 grid **inside** the tight text rect (not around it, to avoid being fooled by dark panel borders):
+   - ≥50% samples have luminance > 200 → **`'white'`** (speech bubble, white interior)
+   - Otherwise → check `sampleBorderColor()`
+2. **`sampleBorderColor()`** — samples a `SOLID_RING=12px` wide ring just outside the text rect at 4px intervals, computes per-channel mean + stddev:
+   - max channel stddev < `SOLID_THRESH=28` → **`'solid'`** (uniform panel background)
+   - Otherwise → **`'lama'`** (complex manga artwork background)
 
-Known limitation: classification can fail for ambiguous backgrounds (deferred).
-
-### Speech bubble path — white rect
+### Speech bubble path — `'white'`
 1. `scanBubbleBounds` → full bubble interior bounds (pixel coords)
-2. Paint full bubble interior (bx,by → bx2,by2) white (255,255,255,255) in `outData` — covers all text even if tight rect underestimates
+2. Paint expanded tight rect (+ `WHITE_EXPAND=7px` where room allows) white in `outData`
 3. Convert to percentage-based rect → added to `expandedRects` in response
 
 ### `scanBubbleBounds()`
 Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at luminance < `DARK_THRESH=80`. Returns pixel-coordinate expanded bounds `[bx, by, bx2, by2]`. Tunables: `DARK_THRESH=80`, `MAX_EXPAND=200`, `SCAN_SAMPLES=9`.
 
-### Background text path — LaMa
+### Solid background path — `'solid'`
+1. Uses the already-computed `sampleBorderColor()` mean RGB
+2. Fills tight rect + `BG_PADDING=8px` with that averaged color
+3. Fast, no model needed — handles text on colored/toned panels
+
+### Background text path — `'lama'`
 1. Bounds = tight text rect + `BG_PADDING=8px`
 2. Context crop: bounds expanded by `LAMA_CTX_FRAC=0.5 × max(w,h)` per side so LaMa sees surrounding background
-3. Rectangular mask covers only the bounds region within the crop
+3. Pixel-level mask: within bounds, mask only pixels with luminance > `TEXT_LUM_THRESH=160` (text ink on dark background); fallback to full rect if < 1% pixels masked
 4. Scale image crop + mask → 512×512
 5. `runLama()`: image `[1,3,512,512]` float32 (0–1) + mask `[1,1,512,512]` float32 → output `[1,3,512,512]`. Tensor names detected dynamically via `sess.inputNames`.
-6. Scale output back to crop size
-7. Paste only masked pixels (bounds region) into `outData` — context pixels are discarded
+6. Scale output back to crop size; paste only masked pixels into `outData`
+7. OPFS cache auto-recovers: if `InferenceSession.create` throws (corrupted cache), deletes the cached file and re-downloads before retrying
 
-Output: transparent PNG overlay — white tight rects where speech bubbles were, LaMa-reconstructed pixels where background text was.
+Output: transparent PNG overlay — white rects (speech bubbles), solid-color fills (uniform-bg text), LaMa-reconstructed pixels (artwork-bg text).
 
 ## Rules
 - Workers communicate via `postMessage` / `onmessage` only — no shared state.

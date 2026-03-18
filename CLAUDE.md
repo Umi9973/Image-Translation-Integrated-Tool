@@ -10,7 +10,7 @@ Unlike "Readers" (e.g., Mokuro), this is an **Editor** designed for scanlation w
 | 1 | **Detection** | `mayocream/comic-text-detector-onnx` (YOLO) via onnxruntime-web | ✅ Live |
 | 2 | **OCR** | `l0wgear/manga-ocr-2025-onnx` (ViT + BERT decoder) via onnxruntime-web | ✅ Live |
 | 3 | **Translation** | BYOK API (OpenAI/DeepSeek direct browser call) **or** link-out copy/paste mode | ✅ Live |
-| 4 | **Inpainting** | Hybrid: brightness check routes per bubble — bright interior → paint tight text rect white (speech bubble) + `scanBubbleBounds` returns full bubble interior as `bubble_rect`; dark/colored → LaMa ONNX (`Carve/LaMa-ONNX/lama_fp32.onnx`, ~208 MB, OPFS-cached) reconstructs background; transparent PNG overlay output | ✅ Live |
+| 4 | **Inpainting** | Three-way routing per bubble: bright interior → white fill (speech bubble); dark + uniform border → solid color fill (toned panel text); dark + complex border → LaMa ONNX (`Carve/LaMa-ONNX/lama_fp32.onnx`, ~208 MB, OPFS-cached, auto-recovers corrupt cache) reconstructs background; transparent PNG overlay output | ✅ Live |
 | 5 | **Typesetting** | SVG overlay — vertical CJK columns (`writing-mode="vertical-rl"`), right-to-left, auto-fit; uses `bubble_rect` (full bubble interior) when available; `\` in translation forces column-group break; font: ZCOOL KuaiLe | ✅ Live |
 
 ## 🏗️ Architecture: Zero-Server / Privacy-First
@@ -49,7 +49,7 @@ project-2/
 │   ├── workers/
 │   │   ├── detect.worker.ts    ← ✅ comic-text-detector ONNX inference; outputs tight text-pixel rects (tightenToMask); double-bubble seam detection (findSeamY / findSeamX) with false-positive rejection (gap + perpendicular-axis overlap check) + three-pass deduplication (wrapper / containment / coverage)
 │   │   ├── ocr.worker.ts       ← ✅ manga-ocr encoder+decoder ONNX inference
-│   │   └── inpaint.worker.ts   ← ✅ Hybrid inpaint: isBrightRegion() 5×5 sample routes per bubble → flood-fill white (bright/bubble) or LaMa ONNX (dark/bg-text); lama_fp32.onnx OPFS-cached; transparent PNG overlay output
+│   │   └── inpaint.worker.ts   ← ✅ Three-way inpaint routing: isBrightRegion() (interior 5×5) → white; sampleBorderColor() stddev check → solid fill; else LaMa ONNX; OPFS cache with auto-recovery on corruption
 │   └── ui/
 │       ├── app.ts              ← upload screen; on file pick → renderWorkspace()
 │       ├── app.css             ← global dark theme; CSS variables in :root

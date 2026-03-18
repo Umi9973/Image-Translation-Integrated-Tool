@@ -41,7 +41,7 @@ export function detectBubbles(
       if (msg.type === 'progress') {
         onProgress?.(msg.stage, msg.value)
       } else if (msg.type === 'debug') {
-        fetch('/__debug', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg.data) }).catch(() => {})
+        fetch('/__debug/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg.data) }).catch(() => {})
       } else if (msg.type === 'result') {
         worker.removeEventListener('message', handler)
         resolve(msg.bubbles as MangaBubble[])

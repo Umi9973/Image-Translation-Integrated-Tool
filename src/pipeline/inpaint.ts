@@ -50,6 +50,8 @@ export function inpaintPage(
       const msg = e.data
       if (msg.type === 'progress') {
         onProgress?.(msg.stage as string, msg.current as number, msg.total as number)
+      } else if (msg.type === 'debug') {
+        fetch('/__debug/inpaint', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg.data) }).catch(() => {})
       } else if (msg.type === 'done') {
         worker.removeEventListener('message', handler)
         resolve({

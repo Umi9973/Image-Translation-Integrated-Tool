@@ -7,14 +7,15 @@ export default defineConfig({
     {
       name: 'debug-dump',
       configureServer(server) {
-        server.middlewares.use('/__debug', (req, res) => {
-          if (req.method !== 'POST') { res.statusCode = 405; res.end(); return }
+        server.middlewares.use((req, res, next) => {
+          if (!req.url?.startsWith('/__debug/') || req.method !== 'POST') return next()
+          const name = req.url.slice('/__debug/'.length).replace(/[^a-z0-9_-]/gi, '_')
           const chunks: Buffer[] = []
           req.on('data', c => chunks.push(c))
           req.on('end', () => {
             try {
               const json = JSON.parse(Buffer.concat(chunks).toString())
-              writeFileSync(join(process.cwd(), 'detect-debug.json'), JSON.stringify(json, null, 2))
+              writeFileSync(join(process.cwd(), `${name}-debug.json`), JSON.stringify(json, null, 2))
               res.statusCode = 204; res.end()
             } catch { res.statusCode = 400; res.end() }
           })
