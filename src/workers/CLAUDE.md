@@ -19,7 +19,7 @@ Workers exist to offload heavy ML tasks off the main thread so the UI never free
 
 ### Post-processing pipeline
 1. **NMS** on raw YOLO boxes (IOU_THRESH=0.3, CONF_THRESH=0.45)
-2. **`findSeamY` / `findSeamX`**: gap analysis on the mask to detect double bubbles; minimum box dimension guard (height ≥ 80px for seamY, width ≥ 80px for seamX — these must not be swapped)
+2. **`findSeamY` / `findSeamX`**: gap analysis on the mask to detect double bubbles; minimum box dimension guards: seamY requires both height AND width ≥ 80px (narrow boxes can't be stacked double-bubbles); seamX requires width ≥ 80px
    - **`findSeamX`** (left/right split): per-row vote — counts how many rows have a dark column gap; needs `MIN_VOTE_FRAC=0.20` of rows to agree. Works because vertical text columns span the full height so every row sees both sides.
    - **`findSeamY`** (top/bottom split): horizontal projection profile — for each row counts text-pixel columns; finds actual text extent (trims YOLO box padding); computes quarter averages anchored to text extent; finds the **widest contiguous near-zero band** in the middle 40–80% of the text extent where per-row density ≤ `SEAM_Y_VALLEY_ABS_FRAC` (3% of box width) AND band is ≥ `SEAM_Y_MIN_BAND_FRAC` (5% of text height) rows AND band average ≤ `SEAM_Y_VALLEY_FRAC` (15%) of the weaker half's average. The widest-band requirement distinguishes real inter-bubble gaps (10+ rows) from DBNet inter-character gaps (1–2 rows). Per-column voting fails for stacked bubbles because both bubbles share the same X positions — no column sees text from two different vertical positions.
 3. **`tightenToMask`**: shrink each half-box (or whole box) to the tight bounding rect of mask text-pixels — this is what gets stored in `MangaBubble.rect`

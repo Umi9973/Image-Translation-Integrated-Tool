@@ -447,7 +447,7 @@ function processBlk(
     // Guard on the dimension being split: seamY needs HEIGHT ≥ 2×SPLIT_MIN_H,
     // seamX needs WIDTH ≥ 2×SPLIT_MIN_H.
     const minSplitDim = SPLIT_MIN_H * 2
-    const seamY = (maskData && (oy2 - oy1) >= minSplitDim)
+    const seamY = (maskData && (oy2 - oy1) >= minSplitDim && (ox2 - ox1) >= minSplitDim)
       ? findSeamY(maskData, maskW, x1, y1, x2, y2, scale, dh, origH)
       : null
     const seamX = (!seamY && maskData && (ox2 - ox1) >= minSplitDim)
@@ -556,7 +556,7 @@ function processBlk(
         layer_z:       0,
       }]
     })
-  }).concat((() => { console.log('[detect]', { beforeNMS: boxes.length, afterNMS: kept.length, boxes: dbg }); return [] })())
+  }).concat((() => { self.postMessage({ type: 'debug', data: { beforeNMS: boxes.length, afterNMS: kept.length, boxes: dbg } }); return [] })())
 }
 
 // ── Post-split deduplication ──────────────────────────────────────────────────

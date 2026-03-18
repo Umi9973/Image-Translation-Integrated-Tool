@@ -342,7 +342,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     startRect: { x: number; y: number; w: number; h: number }
   }
   let dragState: DragState | null = null
-
   const ac = new AbortController()
 
   function clientToSvgPct(e: MouseEvent): { x: number; y: number } {
@@ -452,6 +451,12 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   detectBtn.className = 'ws-detect-btn'
   detectBtn.textContent = 'Detect Bubbles'
   controls.appendChild(detectBtn)
+
+  const addBoxBtn = document.createElement('button')
+  addBoxBtn.type = 'button'
+  addBoxBtn.className = 'ws-add-box-btn'
+  addBoxBtn.textContent = '+ Add Box'
+  controls.appendChild(addBoxBtn)
 
   const ocrBtn = document.createElement('button')
   ocrBtn.type = 'button'
@@ -659,6 +664,51 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     inpaintBtn.disabled = bubbles.length === 0
     updateTranslateBtn()
   }
+
+  // ── Manual box creation ────────────────────────────────────────────────
+
+  function addManualBubble(rect: { x: number; y: number; w: number; h: number }): void {
+    const bubble: MangaBubble = {
+      id: crypto.randomUUID(),
+      rect,
+      raw_ja: '',
+      translated_zh: '',
+      state: 'detected',
+      is_locked: false,
+      layer_z: 0,
+    }
+    bubbles.push(bubble)
+    sortedIds = sortBubbleIds(bubbles)
+
+    const svgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    svgRect.setAttribute('x', String(bubble.rect.x))
+    svgRect.setAttribute('y', String(bubble.rect.y))
+    svgRect.setAttribute('width', String(bubble.rect.w))
+    svgRect.setAttribute('height', String(bubble.rect.h))
+    svgRect.setAttribute('vector-effect', 'non-scaling-stroke')
+    svgRect.classList.add('ws-bubble-rect')
+    svgRect.dataset.id = bubble.id
+    svgRect.addEventListener('mousedown', (e) => {
+      e.preventDefault()
+      selectBubble(bubble.id)
+      dragState = {
+        mode: 'move', id: bubble.id, handle: '',
+        startPct: clientToSvgPct(e),
+        startRect: { ...bubble.rect },
+      }
+    })
+    svg.appendChild(svgRect)
+
+    rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
+    countEl.textContent = String(bubbles.length)
+    ocrBtn.disabled = false
+    inpaintBtn.disabled = false
+    selectBubble(bubble.id)
+  }
+
+  addBoxBtn.addEventListener('click', () => {
+    addManualBubble({ x: 40, y: 40, w: 20, h: 20 })
+  })
 
   // ── Translate button state helper ─────────────────────────────────────────
 

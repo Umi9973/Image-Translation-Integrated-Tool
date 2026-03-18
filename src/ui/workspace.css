@@ -175,6 +175,19 @@
 }
 .ws-detect-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.ws-add-box-btn {
+  padding: 7px 14px;
+  background: transparent;
+  border: 1px solid #68d391;
+  border-radius: 4px;
+  color: #68d391;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.ws-add-box-btn:hover { background: rgba(104, 211, 145, 0.12); }
+.ws-add-box-btn.is-active { background: rgba(104, 211, 145, 0.18); border-color: #9ae6b4; color: #9ae6b4; }
+
 .ws-ocr-btn {
   padding: 7px 16px;
   background: #2b6cb0;
