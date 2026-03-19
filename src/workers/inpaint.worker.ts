@@ -301,6 +301,7 @@ async function inpaintBackground(
   outData: Uint8ClampedArray,
   W: number, H: number,
   bounds: [number, number, number, number],
+  textMask?: Uint8Array,
 ): Promise<void> {
   const [bx, by, bx2, by2] = bounds
   const bw = bx2 - bx
@@ -315,8 +316,8 @@ async function inpaintBackground(
   const rw  = rx2 - rx1
   const rh  = ry2 - ry1
 
-  // Pixel-level mask: within the bounds, mask only bright (text) pixels.
-  // Since we're on the dark-background route, text ink is the bright outlier.
+  // Pixel-level mask: within the bounds, mark text pixels.
+  // Prefer the detection heatmap (exact text strokes); fall back to luminance threshold.
   const cropMask = new Uint8Array(rw * rh)
   let maskedCount = 0
   for (let row = 0; row < rh; row++) {
@@ -324,12 +325,16 @@ async function inpaintBackground(
     for (let col = 0; col < rw; col++) {
       const gx = rx1 + col
       if (gx < bx || gx > bx2 || gy < by || gy > by2) continue
-      const p   = (gy * W + gx) * 4
-      const lum = origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
-      if (lum > TEXT_LUM_THRESH) { cropMask[row * rw + col] = 255; maskedCount++ }
+      const isText = textMask
+        ? textMask[gy * W + gx] > 0
+        : (() => {
+            const p = (gy * W + gx) * 4
+            return origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114 > TEXT_LUM_THRESH
+          })()
+      if (isText) { cropMask[row * rw + col] = 255; maskedCount++ }
     }
   }
-  // Fallback: if threshold found almost nothing, use the full rectangle
+  // Fallback: if mask found almost nothing, use the full rectangle
   if (maskedCount < (bw * bh) * 0.01) {
     for (let row = 0; row < rh; row++) {
       const gy = ry1 + row
@@ -391,6 +396,7 @@ interface ExpandedRect { id: string; rect: RectPct }
 async function processAll(
   imageBlob: Blob,
   bubbles: BubbleMsg[],
+  textMask?: Uint8Array,
 ): Promise<{ blob: Blob; expandedRects: ExpandedRect[] }> {
   const bitmap = await self.createImageBitmap(imageBlob)
   const W = bitmap.width
@@ -482,6 +488,8 @@ async function processAll(
       const fy2 = Math.min(H, ty2 + BG_PADDING)
       for (let y = fy1; y <= fy2; y++) {
         for (let x = fx1; x <= fx2; x++) {
+          // If detection mask available, only overwrite confirmed text pixels
+          if (textMask && textMask[y * W + x] === 0) continue
           const idx = (y * W + x) * 4
           outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
         }
@@ -494,7 +502,7 @@ async function processAll(
         Math.max(0, tx1 - BG_PADDING), Math.max(0, ty1 - BG_PADDING),
         Math.min(W, tx2 + BG_PADDING), Math.min(H, ty2 + BG_PADDING),
       ]
-      await inpaintBackground(sess!, origPixels, outData, W, H, bounds)
+      await inpaintBackground(sess!, origPixels, outData, W, H, bounds, textMask)
     }
   }
 
@@ -512,7 +520,8 @@ self.addEventListener('message', async (e: MessageEvent) => {
   if (msg.type !== 'inpaint') return
   try {
     post({ type: 'progress', current: 0, total: msg.bubbles.length, stage: 'Starting…' })
-    const { blob, expandedRects } = await processAll(msg.imageBlob as Blob, msg.bubbles as BubbleMsg[])
+    const textMask = msg.textMask instanceof Uint8Array ? msg.textMask as Uint8Array : undefined
+    const { blob, expandedRects } = await processAll(msg.imageBlob as Blob, msg.bubbles as BubbleMsg[], textMask)
     post({ type: 'done', resultBlob: blob, expandedRects })
   } catch (err) {
     post({ type: 'error', message: String(err) })

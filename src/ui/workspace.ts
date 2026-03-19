@@ -1,6 +1,7 @@
 import './workspace.css'
 import type { MangaBubble, MangaPage, BubbleState } from '../types'
-import { detectBubbles } from '../pipeline/detect'
+import { detectBubblesWithMask } from '../pipeline/detect'
+import type { DetectionMask } from '../pipeline/detect'
 import { runOCR } from '../pipeline/ocr'
 import { loadAPIConfig, buildPrompt, translatePage, parseTranslationResponse } from '../pipeline/translate'
 import { inpaintPage } from '../pipeline/inpaint'
@@ -260,6 +261,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   let bubbles: MangaBubble[] = []
   let sortedIds: string[] = []
   let selectedId: string | null = null
+  let pageMask: DetectionMask | null = null
 
   // ── Build DOM ──────────────────────────────────────────────────────────────
   container.innerHTML = ''
@@ -731,10 +733,12 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     statusEl.textContent = 'Starting…'
 
     try {
-      bubbles = await detectBubbles(
+      const detected = await detectBubblesWithMask(
         page.imageBlob,
         (stage, _value) => { statusEl.textContent = stage },
       )
+      bubbles = detected.bubbles
+      pageMask = detected.mask
       sortedIds = sortBubbleIds(bubbles)
       selectedId = null
 
@@ -920,6 +924,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         (stage, current, total) => {
           statusEl.textContent = `${stage} (${current}/${total})`
         },
+        pageMask,
       )
 
       // Write expanded bubble interior rects back into each speech bubble

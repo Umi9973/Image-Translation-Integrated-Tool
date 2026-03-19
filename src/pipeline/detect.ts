@@ -29,6 +29,40 @@ function getWorker(): Worker {
  * @param imageBlob  The raw image file
  * @param onProgress Optional callback for loading/inference progress (stage label, 0–1 value)
  */
+export interface DetectionMask {
+  data: Uint8Array
+  w: number
+  h: number
+}
+
+export function detectBubblesWithMask(
+  imageBlob: Blob,
+  onProgress?: (stage: string, value: number) => void,
+): Promise<{ bubbles: MangaBubble[]; mask: DetectionMask | null }> {
+  return new Promise((resolve, reject) => {
+    const worker = getWorker()
+    const handler = (e: MessageEvent) => {
+      const msg = e.data
+      if (msg.type === 'progress') {
+        onProgress?.(msg.stage, msg.value)
+      } else if (msg.type === 'debug') {
+        fetch('/__debug/detect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg.data) }).catch(() => {})
+      } else if (msg.type === 'result') {
+        worker.removeEventListener('message', handler)
+        const mask: DetectionMask | null = msg.mask
+          ? { data: msg.mask as Uint8Array, w: msg.maskW as number, h: msg.maskH as number }
+          : null
+        resolve({ bubbles: msg.bubbles, mask })
+      } else if (msg.type === 'error') {
+        worker.removeEventListener('message', handler)
+        reject(new Error(msg.message as string))
+      }
+    }
+    worker.addEventListener('message', handler)
+    worker.postMessage({ type: 'detect', imageBlob })
+  })
+}
+
 export function detectBubbles(
   imageBlob: Blob,
   onProgress?: (stage: string, value: number) => void,

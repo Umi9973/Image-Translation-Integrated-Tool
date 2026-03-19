@@ -8,6 +8,7 @@
  */
 
 import type { MangaBubble } from '../types'
+import type { DetectionMask } from './detect'
 
 // Singleton worker — created once, reused across inpainting calls
 let _worker: Worker | null = null
@@ -42,6 +43,7 @@ export function inpaintPage(
   bubbles: MangaBubble[],
   imageBlob: Blob,
   onProgress?: (stage: string, current: number, total: number) => void,
+  textMask?: DetectionMask | null,
 ): Promise<InpaintResult> {
   return new Promise((resolve, reject) => {
     const worker = getWorker()
@@ -65,10 +67,18 @@ export function inpaintPage(
     }
 
     worker.addEventListener('message', handler)
-    worker.postMessage({
+    const msg: Record<string, unknown> = {
       type: 'inpaint',
       imageBlob,
       bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect })),
-    })
+    }
+    if (textMask) {
+      msg.textMask = textMask.data
+      msg.textMaskW = textMask.w
+      msg.textMaskH = textMask.h
+      worker.postMessage(msg, { transfer: [textMask.data.buffer] })
+    } else {
+      worker.postMessage(msg)
+    }
   })
 }

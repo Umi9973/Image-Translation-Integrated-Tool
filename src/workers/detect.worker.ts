@@ -660,7 +660,33 @@ self.onmessage = async (e: MessageEvent) => {
       maskData, maskW,
     ))
 
-    self.postMessage({ type: 'result', bubbles })
+    // Rescale the binary mask from 1024×1024 (letterboxed) → original image size.
+    // This gives the inpaint worker a 1:1 pixel map it can use directly.
+    let scaledMask: Uint8Array | null = null
+    if (maskData) {
+      const newW = Math.round(origW * scale)
+      const newH = Math.round(origH * scale)
+      const maskImgData = new Uint8ClampedArray(INPUT_SIZE * INPUT_SIZE * 4)
+      for (let i = 0; i < INPUT_SIZE * INPUT_SIZE; i++) {
+        const v = maskData[i] > MASK_TEXT_THRESH ? 255 : 0
+        maskImgData[i * 4] = v; maskImgData[i * 4 + 1] = v
+        maskImgData[i * 4 + 2] = v; maskImgData[i * 4 + 3] = 255
+      }
+      const mc = new OffscreenCanvas(INPUT_SIZE, INPUT_SIZE)
+      mc.getContext('2d')!.putImageData(new ImageData(maskImgData, INPUT_SIZE, INPUT_SIZE), 0, 0)
+      const oc = new OffscreenCanvas(origW, origH)
+      oc.getContext('2d')!.drawImage(mc, dw, dh, newW, newH, 0, 0, origW, origH)
+      const od = oc.getContext('2d')!.getImageData(0, 0, origW, origH).data
+      scaledMask = new Uint8Array(origW * origH)
+      for (let i = 0; i < origW * origH; i++) scaledMask[i] = od[i * 4] > 128 ? 255 : 0
+    }
+
+    if (scaledMask) {
+      self.postMessage({ type: 'result', bubbles, mask: scaledMask, maskW: origW, maskH: origH },
+        { transfer: [scaledMask.buffer] })
+    } else {
+      self.postMessage({ type: 'result', bubbles })
+    }
   } catch (err) {
     self.postMessage({ type: 'error', message: String(err) })
   }
