@@ -17,7 +17,8 @@
  *   - Everything else           → transparent (0,0,0,0)
  * The UI stamps this directly onto the .ws-inpaint-layer canvas.
  *
- * Model: Carve/LaMa-ONNX / lama_fp32.onnx (~208 MB, OPFS-cached after first use)
+ * Model: dreMaz/AnimeMangaInpainting / lama_manga_fp32.onnx (~199 MB, OPFS-cached after first use)
+ *         LaMa fine-tuned on 300k manga+anime images. Input/output: 0–255 float32.
  *
  * Message protocol:
  *   IN  { type: 'inpaint', imageBlob: Blob, bubbles: Array<{id, rect: {x,y,w,h}}> }
@@ -33,8 +34,8 @@ import * as ort from 'onnxruntime-web'
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.2/dist/'
 
-const MODEL_URL     = 'https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx'
-const OPFS_FILENAME = 'lama_fp32.onnx'
+const MODEL_URL     = '/lama_manga_fp32.onnx'
+const OPFS_FILENAME = 'lama_manga_fp32.onnx'
 const LAMA_SIZE       = 512
 const LAMA_CTX_FRAC   = 0.5   // context padding around background text for LaMa (fraction of max(w,h))
 const BG_PADDING      = 8     // px padding around tight text rect for LaMa bounds
@@ -44,7 +45,7 @@ const BRIGHT_THRESH    = 200  // luminance above this = bright pixel
 const BRIGHT_MIN_RATIO = 0.50 // fraction of interior samples that must be bright to confirm speech bubble
 
 const SOLID_RING   = 12  // px wide sampling ring around text rect for solid-bg detection
-const SOLID_THRESH = 28  // max per-channel stddev — below this = solid/uniform background
+const SOLID_THRESH = 65  // max per-channel stddev — below this = solid/uniform background (65 allows screentone halftone patterns)
 
 // ── Bubble boundary scanner ────────────────────────────────────────────────────
 // Used for speech bubbles only: expands the tight text rect outward until
@@ -119,6 +120,39 @@ function isBrightRegion(
     }
   }
   return (bright / (GRID * GRID)) >= BRIGHT_MIN_RATIO
+}
+
+// ── Background color from heatmap ─────────────────────────────────────────────
+// When the detection heatmap is available, sample only the NON-text pixels
+// (mask=0) in the region + padding. These are guaranteed to be background.
+// Returns mean RGB, mean luminance, and whether the background is solid (low variance).
+
+function sampleBackgroundFromMask(
+  pixels: Uint8ClampedArray,
+  W: number, H: number,
+  tx1: number, ty1: number, tx2: number, ty2: number,
+  textMask: Uint8Array,
+): { r: number; g: number; b: number; lum: number; solid: boolean } {
+  const bx1 = Math.max(0, tx1 - SOLID_RING)
+  const by1 = Math.max(0, ty1 - SOLID_RING)
+  const bx2 = Math.min(W - 1, tx2 + SOLID_RING)
+  const by2 = Math.min(H - 1, ty2 + SOLID_RING)
+  const STEP = 3
+  const rs: number[] = [], gs: number[] = [], bs: number[] = []
+  for (let y = by1; y <= by2; y += STEP) {
+    for (let x = bx1; x <= bx2; x += STEP) {
+      if (textMask[y * W + x] > 0) continue  // skip text pixels
+      const p = (y * W + x) * 4
+      rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
+    }
+  }
+  if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false }
+  const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
+  const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
+  const mr = mean(rs), mg = mean(gs), mb = mean(bs)
+  const lum  = mr * 0.299 + mg * 0.587 + mb * 0.114
+  const solid = Math.max(stddev(rs, mr), stddev(gs, mg), stddev(bs, mb)) < SOLID_THRESH
+  return { r: Math.round(mr), g: Math.round(mg), b: Math.round(mb), lum, solid }
 }
 
 // ── Solid background detection ────────────────────────────────────────────────
@@ -220,7 +254,7 @@ async function downloadModel(): Promise<ArrayBuffer> {
     if (contentLength > 0) {
       const pct = Math.round(received / contentLength * 100)
       post({ type: 'progress', current: received, total: contentLength,
-        stage: `Downloading LaMa model… ${pct}% (208 MB, cached after first run)` })
+        stage: `Downloading inpaint model… ${pct}% (199 MB, cached after first run)` })
     }
   }
   const arr = new Uint8Array(received)
@@ -275,9 +309,10 @@ async function runLama(
   const imgData  = new Float32Array(3 * N)
   const maskData = new Float32Array(N)
   for (let i = 0; i < N; i++) {
-    imgData[i]         = imgPixels[i * 4]     / 255
-    imgData[N + i]     = imgPixels[i * 4 + 1] / 255
-    imgData[2 * N + i] = imgPixels[i * 4 + 2] / 255
+    // Model expects 0–255 input (normalization is done inside the ONNX wrapper)
+    imgData[i]         = imgPixels[i * 4]
+    imgData[N + i]     = imgPixels[i * 4 + 1]
+    imgData[2 * N + i] = imgPixels[i * 4 + 2]
     maskData[i]        = maskPixels[i] > 128 ? 1.0 : 0.0
   }
   const imgName  = sess.inputNames.find(n => /image|img|input/i.test(n))  ?? sess.inputNames[0]
@@ -366,18 +401,25 @@ async function inpaintBackground(
   const N = LAMA_SIZE * LAMA_SIZE
   const outRgba = new Uint8ClampedArray(N * 4)
   for (let p = 0; p < N; p++) {
-    outRgba[p * 4]     = Math.max(0, Math.min(255, Math.round(output[p]         * 255)))
-    outRgba[p * 4 + 1] = Math.max(0, Math.min(255, Math.round(output[N + p]     * 255)))
-    outRgba[p * 4 + 2] = Math.max(0, Math.min(255, Math.round(output[2 * N + p] * 255)))
+    // Model outputs 0–255 directly (no scaling needed)
+    outRgba[p * 4]     = Math.max(0, Math.min(255, Math.round(output[p]        )))
+    outRgba[p * 4 + 1] = Math.max(0, Math.min(255, Math.round(output[N + p]    )))
+    outRgba[p * 4 + 2] = Math.max(0, Math.min(255, Math.round(output[2 * N + p])))
     outRgba[p * 4 + 3] = 255
   }
   const resultPixels = scalePixels(outRgba, LAMA_SIZE, LAMA_SIZE, rw, rh)
 
-  // Paste only masked pixels into outData (the transparent overlay)
+  // Paste the entire bounds region from LaMa into outData.
+  // LaMa produces output for all pixels: non-text pixels retain original color,
+  // text pixels get background reconstructed from context.
+  // Pasting the full region (not just masked pixels) gives a seamless result
+  // with no mismatched spots on the background.
   for (let row = 0; row < rh; row++) {
+    const gy = ry1 + row
     for (let col = 0; col < rw; col++) {
-      if (cropMask[row * rw + col] === 0) continue
-      const globalIdx = ((ry1 + row) * W + (rx1 + col)) * 4
+      const gx = rx1 + col
+      if (gx < bx || gx > bx2 || gy < by || gy > by2) continue
+      const globalIdx = (gy * W + gx) * 4
       const localIdx  = (row * rw + col) * 4
       outData[globalIdx]     = resultPixels[localIdx]
       outData[globalIdx + 1] = resultPixels[localIdx + 1]
@@ -423,20 +465,35 @@ async function processAll(
     const ty1 = Math.floor((b.rect.y / 100) * H)
     const tx2 = Math.ceil((b.rect.x + b.rect.w) / 100 * W)
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
-    const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
     let route: Route
-    if (bright) {
-      route = 'white'
-    } else {
-      const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
-      if (border.solid) {
-        solidColors.set(i, border)
+    let dbgExtra: object = {}
+    if (textMask) {
+      const bg = sampleBackgroundFromMask(origPixels, W, H, tx1, ty1, tx2, ty2, textMask)
+      dbgExtra = { maskUsed: true, bgLum: +bg.lum.toFixed(1), bgSolid: bg.solid, bgRgb: [bg.r, bg.g, bg.b] }
+      if (bg.lum > 220) {
+        route = 'white'
+      } else if (bg.solid) {
+        solidColors.set(i, bg)
         route = 'solid'
       } else {
         route = 'lama'
       }
+    } else {
+      const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
+      dbgExtra = { maskUsed: false, bright }
+      if (bright) {
+        route = 'white'
+      } else {
+        const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
+        if (border.solid) {
+          solidColors.set(i, border)
+          route = 'solid'
+        } else {
+          route = 'lama'
+        }
+      }
     }
-    dbg.push({ id: b.id, rect_pct: b.rect, bright, route })
+    dbg.push({ id: b.id, rect_pct: b.rect, route, ...dbgExtra })
     return route
   })
 

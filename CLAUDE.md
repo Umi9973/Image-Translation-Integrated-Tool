@@ -10,7 +10,7 @@ Unlike "Readers" (e.g., Mokuro), this is an **Editor** designed for scanlation w
 | 1 | **Detection** | `mayocream/comic-text-detector-onnx` (YOLO) via onnxruntime-web | ✅ Live |
 | 2 | **OCR** | `l0wgear/manga-ocr-2025-onnx` (ViT + BERT decoder) via onnxruntime-web | ✅ Live |
 | 3 | **Translation** | BYOK API (OpenAI/DeepSeek direct browser call) **or** link-out copy/paste mode | ✅ Live |
-| 4 | **Inpainting** | Three-way routing per bubble: bright interior → white fill (speech bubble); dark + uniform border → solid color fill (toned panel text); dark + complex border → LaMa ONNX (`Carve/LaMa-ONNX/lama_fp32.onnx`, ~208 MB, OPFS-cached, auto-recovers corrupt cache) reconstructs background; transparent PNG overlay output | ✅ Live |
+| 4 | **Inpainting** | Three-way routing per bubble: bright interior → white fill (speech bubble); dark + uniform border → solid color fill (toned panel text); dark + complex border → manga-tuned LaMa ONNX (`dreMaz/AnimeMangaInpainting/lama_manga_fp32.onnx`, ~199 MB, served from `public/`, OPFS-cached, auto-recovers corrupt cache) reconstructs background; uses detection heatmap for pixel-accurate text masks; transparent PNG overlay output | ✅ Live |
 | 5 | **Typesetting** | SVG overlay — vertical CJK columns (`writing-mode="vertical-rl"`), right-to-left, auto-fit; uses `bubble_rect` (full bubble interior) when available; `\` in translation forces column-group break; font: ZCOOL KuaiLe | ✅ Live |
 
 ## 🏗️ Architecture: Zero-Server / Privacy-First
@@ -70,6 +70,9 @@ project-2/
 | ML inference | onnxruntime-web 1.24.2 (WASM backend, models fetched from HuggingFace) |
 | Inpainting | LaMa ONNX via onnxruntime-web (`Carve/LaMa-ONNX/lama_fp32.onnx`, ~208 MB, OPFS-cached after first use) |
 | Hosting target | Static (Vercel / Netlify / GitHub Pages) |
+
+## 🚫 Git Rules
+- **NEVER run `git push` without explicit user permission.** Always stop and ask before pushing to GitHub.
 
 ## 🚦 Dev Commands
 ```bash

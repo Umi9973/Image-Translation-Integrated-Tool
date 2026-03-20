@@ -2,3 +2,5 @@ node_modules/
 dist/
 .venv/
 *.local
+public/*.onnx
+*-debug.json

@@ -47,19 +47,22 @@ Bubble border expansion (`scanBubbleBounds`) has been moved to `inpaint.worker.t
 - `attention_mask` and `encoder_attention_mask` are checked via `dec.inputNames` and only passed if the model declares them (this export does NOT use them)
 
 ## inpaint.worker.ts — Hybrid Inpainting
-Model: `Carve/LaMa-ONNX/lama_fp32.onnx` (~208 MB). Fetched once, saved to OPFS (`lama_fp32.onnx`), reused on subsequent runs. Only loaded when at least one bubble routes to LaMa.
+Model: `dreMaz/AnimeMangaInpainting / lama_manga_fp32.onnx` (~199 MB). LaMa fine-tuned on 300k manga+anime images. Served from `/lama_manga_fp32.onnx` (Vite `public/`), cached in OPFS (`lama_manga_fp32.onnx`) after first load. Only loaded when at least one bubble routes to LaMa.
+
+**I/O format**: image input `[1,3,512,512]` float32 **0–255** (normalization inside ONNX wrapper), mask `[1,1,512,512]` float32 0 or 1, output `[1,3,512,512]` float32 **0–255** (no post-scaling needed).
 
 ### Message protocol
-- **IN**: `{ type: 'inpaint', imageBlob: Blob, bubbles: Array<{id, rect: {x,y,w,h}}> }` — rect values percentage-based
+- **IN**: `{ type: 'inpaint', imageBlob: Blob, bubbles: Array<{id, rect: {x,y,w,h}}>, textMask?: Uint8Array }` — rect values percentage-based; textMask is the rescaled detection heatmap (>0 = text pixel) at original image dimensions
 - **OUT done**: `{ type: 'done', resultBlob: Blob, expandedRects: Array<{id, rect}> }` — expandedRects only for speech bubble route, percentage-based full bubble interior
 
 ### Routing — three-way classification
-1. **`isBrightRegion()`** — samples a 5×5 grid **inside** the tight text rect (not around it, to avoid being fooled by dark panel borders):
-   - ≥50% samples have luminance > 200 → **`'white'`** (speech bubble, white interior)
-   - Otherwise → check `sampleBorderColor()`
-2. **`sampleBorderColor()`** — samples a `SOLID_RING=12px` wide ring just outside the text rect at 4px intervals, computes per-channel mean + stddev:
-   - max channel stddev < `SOLID_THRESH=28` → **`'solid'`** (uniform panel background)
-   - Otherwise → **`'lama'`** (complex manga artwork background)
+**When detection heatmap (`textMask`) is available** — uses `sampleBackgroundFromMask()`:
+- Samples non-text pixels (mask=0) in `SOLID_RING=12px` region around text rect
+- bgLum > 220 → **`'white'`** (speech bubble)
+- max per-channel stddev < `SOLID_THRESH=65` → **`'solid'`** (uniform background)
+- Otherwise → **`'lama'`** (complex artwork)
+
+**Fallback (no heatmap)**: `isBrightRegion()` → `'white'`; `sampleBorderColor()` stddev check → `'solid'` or `'lama'`
 
 ### Speech bubble path — `'white'`
 1. `scanBubbleBounds` → full bubble interior bounds (pixel coords)
@@ -67,23 +70,22 @@ Model: `Carve/LaMa-ONNX/lama_fp32.onnx` (~208 MB). Fetched once, saved to OPFS (
 3. Convert to percentage-based rect → added to `expandedRects` in response
 
 ### `scanBubbleBounds()`
-Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at luminance < `DARK_THRESH=80`. Returns pixel-coordinate expanded bounds `[bx, by, bx2, by2]`. Tunables: `DARK_THRESH=80`, `MAX_EXPAND=200`, `SCAN_SAMPLES=9`.
+Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at luminance < `DARK_THRESH=80`. Returns pixel-coordinate expanded bounds `[bx, by, bx2, by2]`.
 
 ### Solid background path — `'solid'`
-1. Uses the already-computed `sampleBorderColor()` mean RGB
-2. Fills tight rect + `BG_PADDING=8px` with that averaged color
-3. Fast, no model needed — handles text on colored/toned panels
+1. Uses sampled mean RGB from `sampleBackgroundFromMask()` or `sampleBorderColor()`
+2. Overwrites only confirmed text pixels (mask>0) when heatmap available, else fills rect + `BG_PADDING=8px`
+3. Fast, no model needed
 
 ### Background text path — `'lama'`
 1. Bounds = tight text rect + `BG_PADDING=8px`
-2. Context crop: bounds expanded by `LAMA_CTX_FRAC=0.5 × max(w,h)` per side so LaMa sees surrounding background
-3. Pixel-level mask: within bounds, mask only pixels with luminance > `TEXT_LUM_THRESH=160` (text ink on dark background); fallback to full rect if < 1% pixels masked
-4. Scale image crop + mask → 512×512
-5. `runLama()`: image `[1,3,512,512]` float32 (0–1) + mask `[1,1,512,512]` float32 → output `[1,3,512,512]`. Tensor names detected dynamically via `sess.inputNames`.
-6. Scale output back to crop size; paste only masked pixels into `outData`
-7. OPFS cache auto-recovers: if `InferenceSession.create` throws (corrupted cache), deletes the cached file and re-downloads before retrying
+2. Context crop: bounds expanded by `LAMA_CTX_FRAC=0.5 × max(w,h)` per side
+3. Pixel mask: prefers heatmap; falls back to luminance > `TEXT_LUM_THRESH=160`; falls back to full rect if < 1% pixels masked
+4. Scale image crop + mask → 512×512; send image as 0–255 float32
+5. Output is 0–255 float32 — scale back to crop size; paste full bounds region into `outData`
+6. OPFS cache auto-recovers on corruption
 
-Output: transparent PNG overlay — white rects (speech bubbles), solid-color fills (uniform-bg text), LaMa-reconstructed pixels (artwork-bg text).
+Output: transparent PNG overlay — white rects (speech bubbles), solid-color fills (uniform-bg text), manga-LaMa-reconstructed pixels (artwork-bg text).
 
 ## Rules
 - Workers communicate via `postMessage` / `onmessage` only — no shared state.
