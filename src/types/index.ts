@@ -10,6 +10,10 @@ export interface MangaBubble {
   state: BubbleState
   is_locked: boolean    // user has finalized this bubble
   layer_z: number       // for overlapping bubbles
+  source?: 'detected' | 'manual'  // how the bubble was created
+  shape?: 'rect' | 'bubble'       // cover background shape: sharp rect or heavily-rounded
+  cover?: boolean                 // render background fill behind text in typeset layer
+  coverOutline?: boolean          // draw a black border around the cover fill
 }
 
 export interface MangaPage {

@@ -60,6 +60,16 @@ function normalizeVertical(text: string): string {
   return s
 }
 
+// ── Cover background shape helper ────────────────────────────────────────────
+
+function computeRxRy(w: number, h: number, shape: 'rect' | 'bubble' | undefined): { rx: number; ry: number } {
+  if (shape === 'bubble') {
+    const r = Math.min(w, h) * 0.40
+    return { rx: r, ry: r }
+  }
+  return { rx: 4, ry: 4 }
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const FONT_FAMILY = "'ZCOOL KuaiLe', 'Microsoft YaHei', 'PingFang SC', sans-serif"
@@ -307,6 +317,27 @@ export function renderTypesetToCanvas(
     const rightColCenterX = blockLeft + totalW - fontSize / 2
     const topY = by + PADDING
 
+    if (bubble.cover || bubble.source === 'manual') {
+      const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
+      const r = Math.min(rx, ry)
+      const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
+      ctx.save()
+      ctx.beginPath()
+      if (typeof (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect === 'function') {
+        (ctx as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect(bx, by, bw, bh, r)
+      } else {
+        ctx.rect(bx, by, bw, bh)
+      }
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+      if (bubble.coverOutline) {
+        ctx.strokeStyle = '#1a1a1a'
+        ctx.lineWidth = strokeW
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
     ctx.save()
     ctx.font         = `${fontSize}px ${FONT_FAMILY}`
     ctx.textBaseline = 'top'
@@ -435,6 +466,26 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     // Rightmost column x (center of column, columns go right-to-left)
     const rightColCenterX = blockLeft + totalW - fontSize / 2
     const topY = by + PADDING
+
+    if (bubble.cover || bubble.source === 'manual') {
+      const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
+      const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
+      const bg = document.createElementNS(ns, 'rect')
+      bg.setAttribute('x',      String(bx))
+      bg.setAttribute('y',      String(by))
+      bg.setAttribute('width',  String(bw))
+      bg.setAttribute('height', String(bh))
+      bg.setAttribute('rx',     String(rx))
+      bg.setAttribute('ry',     String(ry))
+      bg.setAttribute('fill',   '#ffffff')
+      if (bubble.coverOutline) {
+        bg.setAttribute('stroke',       '#1a1a1a')
+        bg.setAttribute('stroke-width', String(strokeW))
+      } else {
+        bg.setAttribute('stroke', 'none')
+      }
+      svg.appendChild(bg)
+    }
 
     const g = document.createElementNS(ns, 'g')
     g.setAttribute('font-family',  FONT_FAMILY)

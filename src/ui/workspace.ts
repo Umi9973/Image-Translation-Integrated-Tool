@@ -79,9 +79,12 @@ function updateEditorBadge(editor: HTMLElement, state: BubbleState): void {
 // ── Editor rendering ──────────────────────────────────────────────────────────
 
 interface EditorCallbacks {
-  onTextChange: (field: 'raw_ja' | 'translated_zh', value: string) => void
-  onLockToggle: () => void
-  onNavigate: (direction: -1 | 1) => void
+  onTextChange:  (field: 'raw_ja' | 'translated_zh', value: string) => void
+  onLockToggle:  () => void
+  onNavigate:    (direction: -1 | 1) => void
+  onCoverChange:   (cover: boolean) => void
+  onOutlineChange: (outline: boolean) => void
+  onShapeChange:   (shape: 'rect' | 'bubble') => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -169,10 +172,50 @@ function renderEditor(
   actions.appendChild(badge)
   actions.appendChild(lockBtn)
 
+  // Cover section — toggle background fill behind typeset text
+  const coverSection = document.createElement('div')
+  coverSection.className = 'ws-cover-section'
+
+  const coverLabel = document.createElement('label')
+  coverLabel.className = 'ws-cover-label'
+  const coverCheck = document.createElement('input')
+  coverCheck.type = 'checkbox'
+  coverCheck.checked = bubble.cover ?? false
+  coverCheck.addEventListener('change', () => callbacks.onCoverChange(coverCheck.checked))
+  coverLabel.appendChild(coverCheck)
+  coverLabel.append(' Cover background')
+
+  const coverControls = document.createElement('div')
+  coverControls.className = 'ws-cover-controls'
+  coverControls.hidden = !coverCheck.checked
+
+  const coverShapeSelect = document.createElement('select')
+  coverShapeSelect.className = 'ws-shape-select'
+  coverShapeSelect.innerHTML = '<option value="rect">Rect</option><option value="bubble">Bubble</option>'
+  coverShapeSelect.value = bubble.shape ?? 'rect'
+  coverShapeSelect.addEventListener('change', () =>
+    callbacks.onShapeChange(coverShapeSelect.value as 'rect' | 'bubble'))
+
+  const outlineLabel = document.createElement('label')
+  outlineLabel.className = 'ws-cover-label'
+  const outlineCheck = document.createElement('input')
+  outlineCheck.type = 'checkbox'
+  outlineCheck.checked = bubble.coverOutline ?? false
+  outlineCheck.addEventListener('change', () => callbacks.onOutlineChange(outlineCheck.checked))
+  outlineLabel.appendChild(outlineCheck)
+  outlineLabel.append(' Outline')
+
+  coverCheck.addEventListener('change', () => { coverControls.hidden = !coverCheck.checked })
+  coverControls.appendChild(coverShapeSelect)
+  coverControls.appendChild(outlineLabel)
+  coverSection.appendChild(coverLabel)
+  coverSection.appendChild(coverControls)
+
   editor.appendChild(jaLabel)
   editor.appendChild(jaTextarea)
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
+  editor.appendChild(coverSection)
   editor.appendChild(nav)
   editor.appendChild(actions)
   container.appendChild(editor)
@@ -231,6 +274,12 @@ function rebuildBubbleList(
 
 // ── SVG overlay ───────────────────────────────────────────────────────────────
 
+// rx/ry in SVG percentage units (viewBox 0 0 100 100)
+function overlayRxRy(rect: { w: number; h: number }, shape: 'rect' | 'bubble' | undefined): number {
+  if (shape === 'bubble') return Math.min(rect.w, rect.h) * 0.40
+  return 0
+}
+
 function rebuildSvgOverlay(
   bubbles: MangaBubble[],
   svg: SVGSVGElement,
@@ -244,6 +293,9 @@ function rebuildSvgOverlay(
     rect.setAttribute('y', String(bubble.rect.y))
     rect.setAttribute('width', String(bubble.rect.w))
     rect.setAttribute('height', String(bubble.rect.h))
+    const r = overlayRxRy(bubble.rect, bubble.shape)
+    rect.setAttribute('rx', String(r))
+    rect.setAttribute('ry', String(r))
     rect.setAttribute('vector-effect', 'non-scaling-stroke')
     rect.classList.add('ws-bubble-rect')
     rect.dataset.id = bubble.id
@@ -344,6 +396,10 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     startRect: { x: number; y: number; w: number; h: number }
   }
   let dragState: DragState | null = null
+
+  type BubbleShape = 'rect' | 'bubble'
+  let drawShape: BubbleShape = 'rect'
+
   const ac = new AbortController()
 
   function clientToSvgPct(e: MouseEvent): { x: number; y: number } {
@@ -361,6 +417,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     el.setAttribute('y', String(bubble.rect.y))
     el.setAttribute('width', String(bubble.rect.w))
     el.setAttribute('height', String(bubble.rect.h))
+    const r = overlayRxRy(bubble.rect, bubble.shape)
+    el.setAttribute('rx', String(r))
+    el.setAttribute('ry', String(r))
   }
 
   function renderHandles(bubble: MangaBubble): void {
@@ -368,27 +427,26 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     g.classList.add('ws-handles-group')
     const { x, y, w, h } = bubble.rect
+    const S = 1.2  // handle size in SVG % units (~7px on a 600px display)
     const pts = [
-      { id: 'nw', cx: x,       cy: y,       cur: 'nw-resize', arrow: '↖' },
-      { id: 'n',  cx: x + w/2, cy: y,       cur: 'n-resize',  arrow: '↑' },
-      { id: 'ne', cx: x + w,   cy: y,       cur: 'ne-resize', arrow: '↗' },
-      { id: 'e',  cx: x + w,   cy: y + h/2, cur: 'e-resize',  arrow: '→' },
-      { id: 'se', cx: x + w,   cy: y + h,   cur: 'se-resize', arrow: '↘' },
-      { id: 's',  cx: x + w/2, cy: y + h,   cur: 's-resize',  arrow: '↓' },
-      { id: 'sw', cx: x,       cy: y + h,   cur: 'sw-resize', arrow: '↙' },
-      { id: 'w',  cx: x,       cy: y + h/2, cur: 'w-resize',  arrow: '←' },
+      { id: 'nw', cx: x,       cy: y,       cur: 'nw-resize' },
+      { id: 'n',  cx: x + w/2, cy: y,       cur: 'n-resize'  },
+      { id: 'ne', cx: x + w,   cy: y,       cur: 'ne-resize' },
+      { id: 'e',  cx: x + w,   cy: y + h/2, cur: 'e-resize'  },
+      { id: 'se', cx: x + w,   cy: y + h,   cur: 'se-resize' },
+      { id: 's',  cx: x + w/2, cy: y + h,   cur: 's-resize'  },
+      { id: 'sw', cx: x,       cy: y + h,   cur: 'sw-resize' },
+      { id: 'w',  cx: x,       cy: y + h/2, cur: 'w-resize'  },
     ]
     for (const p of pts) {
-      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-      el.setAttribute('x', String(p.cx))
-      el.setAttribute('y', String(p.cy))
-      el.setAttribute('text-anchor', 'middle')
-      el.setAttribute('dominant-baseline', 'central')
-      el.setAttribute('font-size', '2.5')
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      el.setAttribute('x', String(p.cx - S / 2))
+      el.setAttribute('y', String(p.cy - S / 2))
+      el.setAttribute('width',  String(S))
+      el.setAttribute('height', String(S))
       el.setAttribute('data-handle', p.id)
-      el.classList.add('ws-handle-arrow')
+      el.classList.add('ws-handle-sq')
       el.style.cursor = p.cur
-      el.textContent = p.arrow
       el.addEventListener('mousedown', (e) => {
         e.stopPropagation()
         e.preventDefault()
@@ -443,6 +501,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   document.addEventListener('mouseup', () => { dragState = null }, { signal: ac.signal })
 
+
   // Controls row
   const controls = document.createElement('div')
   controls.className = 'ws-viewer-controls'
@@ -458,7 +517,15 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   addBoxBtn.type = 'button'
   addBoxBtn.className = 'ws-add-box-btn'
   addBoxBtn.textContent = '+ Add Box'
+  addBoxBtn.title = 'Add a new bubble at the center of the image'
   controls.appendChild(addBoxBtn)
+
+  const shapeSelect = document.createElement('select')
+  shapeSelect.className = 'ws-shape-select'
+  shapeSelect.innerHTML = '<option value="rect">Rect</option><option value="bubble">Bubble</option>'
+  shapeSelect.title = 'Shape for new drawn bubbles'
+  shapeSelect.addEventListener('change', () => { drawShape = shapeSelect.value as BubbleShape })
+  controls.appendChild(shapeSelect)
 
   const ocrBtn = document.createElement('button')
   ocrBtn.type = 'button'
@@ -629,6 +696,17 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         const next = sortedIds[sortedIds.indexOf(id) + dir]
         if (next) selectBubble(next)
       },
+      onCoverChange(cover) { bubble.cover = cover },
+      onOutlineChange(outline) { bubble.coverOutline = outline },
+      onShapeChange(shape) {
+        bubble.shape = shape
+        const el = svg.querySelector<SVGRectElement>(`[data-id="${id}"]`)
+        if (el) {
+          const r = overlayRxRy(bubble.rect, shape)
+          el.setAttribute('rx', String(r))
+          el.setAttribute('ry', String(r))
+        }
+      },
     })
   }
 
@@ -669,7 +747,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   // ── Manual box creation ────────────────────────────────────────────────
 
-  function addManualBubble(rect: { x: number; y: number; w: number; h: number }): void {
+  function addManualBubble(rect: { x: number; y: number; w: number; h: number }, shape: BubbleShape = 'rect'): void {
     const bubble: MangaBubble = {
       id: crypto.randomUUID(),
       rect,
@@ -678,6 +756,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       state: 'detected',
       is_locked: false,
       layer_z: 0,
+      source: 'manual',
+      shape,
+      cover: true,
     }
     bubbles.push(bubble)
     sortedIds = sortBubbleIds(bubbles)
@@ -687,6 +768,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     svgRect.setAttribute('y', String(bubble.rect.y))
     svgRect.setAttribute('width', String(bubble.rect.w))
     svgRect.setAttribute('height', String(bubble.rect.h))
+    const r0 = overlayRxRy(bubble.rect, bubble.shape)
+    svgRect.setAttribute('rx', String(r0))
+    svgRect.setAttribute('ry', String(r0))
     svgRect.setAttribute('vector-effect', 'non-scaling-stroke')
     svgRect.classList.add('ws-bubble-rect')
     svgRect.dataset.id = bubble.id
@@ -709,7 +793,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   }
 
   addBoxBtn.addEventListener('click', () => {
-    addManualBubble({ x: 40, y: 40, w: 20, h: 20 })
+    addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, drawShape)
   })
 
   // ── Translate button state helper ─────────────────────────────────────────
@@ -820,6 +904,17 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
             onNavigate(dir) {
               const next = sortedIds[sortedIds.indexOf(id) + dir]
               if (next) selectBubble(next)
+            },
+            onCoverChange(cover) { bubble.cover = cover },
+            onOutlineChange(outline) { bubble.coverOutline = outline },
+            onShapeChange(shape) {
+              bubble.shape = shape
+              const el = svg.querySelector<SVGRectElement>(`[data-id="${id}"]`)
+              if (el) {
+                const r = overlayRxRy(bubble.rect, shape)
+                el.setAttribute('rx', String(r))
+                el.setAttribute('ry', String(r))
+              }
             },
           })
         }

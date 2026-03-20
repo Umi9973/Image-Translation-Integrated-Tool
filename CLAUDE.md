@@ -11,7 +11,7 @@ Unlike "Readers" (e.g., Mokuro), this is an **Editor** designed for scanlation w
 | 2 | **OCR** | `l0wgear/manga-ocr-2025-onnx` (ViT + BERT decoder) via onnxruntime-web | ✅ Live |
 | 3 | **Translation** | BYOK API (OpenAI/DeepSeek direct browser call) **or** link-out copy/paste mode | ✅ Live |
 | 4 | **Inpainting** | Three-way routing per bubble: bright interior → white fill (speech bubble); dark + uniform border → solid color fill (toned panel text); dark + complex border → manga-tuned LaMa ONNX (`dreMaz/AnimeMangaInpainting/lama_manga_fp32.onnx`, ~199 MB, served from `public/`, OPFS-cached, auto-recovers corrupt cache) reconstructs background; uses detection heatmap for pixel-accurate text masks; transparent PNG overlay output | ✅ Live |
-| 5 | **Typesetting** | SVG overlay — vertical CJK columns (`writing-mode="vertical-rl"`), right-to-left, auto-fit; uses `bubble_rect` (full bubble interior) when available; `\` in translation forces column-group break; font: ZCOOL KuaiLe | ✅ Live |
+| 5 | **Typesetting** | SVG overlay — vertical CJK columns (`writing-mode="vertical-rl"`), right-to-left, auto-fit; uses `bubble_rect` (full bubble interior) when available; `\` in translation forces column-group break; font: ZCOOL KuaiLe; **cover background** renders white fill (rect or rounded-bubble shape) + optional black outline before text for manual or override bubbles | ✅ Live |
 
 ## 🏗️ Architecture: Zero-Server / Privacy-First
 - **No Backend:** Static frontend export. No user images or keys ever touch our servers.
@@ -91,5 +91,9 @@ interface MangaBubble {
   translated_zh: string; // Result of LLM; '\' = forced column-group break in typesetting
   is_locked: boolean;   // User has finalized this bubble
   layer_z: number;      // For overlapping bubbles
+  source?: 'detected' | 'manual'; // 'manual' = user-placed via "+ Add Box"
+  shape?: 'rect' | 'bubble';      // Cover fill shape: sharp rect or heavily-rounded
+  cover?: boolean;                // Render white background fill in typeset layer
+  coverOutline?: boolean;         // Add black border around cover fill (speech bubble look)
 }
 ```
