@@ -73,8 +73,12 @@ Model: `dreMaz/AnimeMangaInpainting / lama_manga_fp32.onnx` (~199 MB). LaMa fine
 Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at luminance < `DARK_THRESH=80`. Returns pixel-coordinate expanded bounds `[bx, by, bx2, by2]`.
 
 ### Solid background path — `'solid'`
-1. Uses sampled mean RGB from `sampleBackgroundFromMask()` or `sampleBorderColor()`
-2. Overwrites only confirmed text pixels (mask>0) when heatmap available, else fills rect + `BG_PADDING=8px`
+1. `sampleBackgroundFromMask()` samples non-text pixels **inside** the text box (not the outer ring), skipping pixels within an adaptive halo dilation radius of any text pixel:
+   - Estimates rough bgLum from inner non-text pixels
+   - If bgLum < 180: checks the 3–6px annulus around text; if >50% of those pixels are bright (lum>200) → thick white halo detected → dilation=6px, else dilation=3px
+   - Uses **mode** (binned by 8) instead of mean for fill color — finds dominant background value, ignores outliers
+   - Falls back to outer ring if too few inner pixels
+2. Fill: dilates textMask by same radius (3 or 6px), overwrites all pixels in dilated zone with sampled color
 3. Fast, no model needed
 
 ### Background text path — `'lama'`

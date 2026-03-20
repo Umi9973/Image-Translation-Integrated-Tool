@@ -45,7 +45,7 @@ const BRIGHT_THRESH    = 200  // luminance above this = bright pixel
 const BRIGHT_MIN_RATIO = 0.50 // fraction of interior samples that must be bright to confirm speech bubble
 
 const SOLID_RING   = 12  // px wide sampling ring around text rect for solid-bg detection
-const SOLID_THRESH = 65  // max per-channel stddev — below this = solid/uniform background (65 allows screentone halftone patterns)
+const SOLID_THRESH = 120  // max per-channel stddev — below this = solid/uniform background (120 catches screentone halftone patterns)
 
 // ── Bubble boundary scanner ────────────────────────────────────────────────────
 // Used for speech bubbles only: expands the tight text rect outward until
@@ -133,26 +133,101 @@ function sampleBackgroundFromMask(
   tx1: number, ty1: number, tx2: number, ty2: number,
   textMask: Uint8Array,
 ): { r: number; g: number; b: number; lum: number; solid: boolean } {
-  const bx1 = Math.max(0, tx1 - SOLID_RING)
-  const by1 = Math.max(0, ty1 - SOLID_RING)
-  const bx2 = Math.min(W - 1, tx2 + SOLID_RING)
-  const by2 = Math.min(H - 1, ty2 + SOLID_RING)
+  const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
+  const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
   const STEP = 3
+
+  // Adaptive halo dilation: check the 3–6px annulus around text pixels.
+  // If bgLum is dark (<180) and that annulus is mainly bright (>50% pixels lum>200),
+  // the artist drew thick white outlines → use 6px dilation.
+  // Otherwise 3px is enough (no halo or thin halo or bright background).
+  const ix1 = Math.max(0, tx1), iy1 = Math.max(0, ty1)
+  const ix2 = Math.min(W - 1, tx2), iy2 = Math.min(H - 1, ty2)
+
+  // Quick rough bgLum estimate from inner non-text pixels at coarse step
+  let roughLumSum = 0, roughLumCount = 0
+  for (let y = iy1; y <= iy2; y += 6) {
+    for (let x = ix1; x <= ix2; x += 6) {
+      if (textMask[y * W + x] > 0) continue
+      const p = (y * W + x) * 4
+      roughLumSum += pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114
+      roughLumCount++
+    }
+  }
+  const roughBgLum = roughLumCount > 0 ? roughLumSum / roughLumCount : 128
+
+  let HALO_DILATION = 3
+  if (roughBgLum < 180) {
+    // Check the 3–6px annulus: pixels near text but beyond the base dilation
+    let annulusBright = 0, annulusTotal = 0
+    for (let y = iy1; y <= iy2; y += STEP) {
+      for (let x = ix1; x <= ix2; x += STEP) {
+        let inOuter = false, inInner = false
+        for (let dy = -6; dy <= 6 && !inOuter; dy++)
+          for (let dx = -6; dx <= 6 && !inOuter; dx++) {
+            const ny = y + dy, nx = x + dx
+            if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) {
+              const dist = Math.max(Math.abs(dy), Math.abs(dx))
+              if (dist <= 6) inOuter = true
+              if (dist <= 3) inInner = true
+            }
+          }
+        if (!inOuter || inInner) continue  // only pixels in the 3–6px annulus
+        const p = (y * W + x) * 4
+        const lum = pixels[p] * 0.299 + pixels[p + 1] * 0.587 + pixels[p + 2] * 0.114
+        annulusTotal++
+        if (lum > 200) annulusBright++
+      }
+    }
+    if (annulusTotal > 0 && annulusBright / annulusTotal > 0.5) HALO_DILATION = 6
+  }
+
+  // Sample non-text pixels inside the box, excluding the halo zone
   const rs: number[] = [], gs: number[] = [], bs: number[] = []
-  for (let y = by1; y <= by2; y += STEP) {
-    for (let x = bx1; x <= bx2; x += STEP) {
-      if (textMask[y * W + x] > 0) continue  // skip text pixels
+  for (let y = iy1; y <= iy2; y += STEP) {
+    for (let x = ix1; x <= ix2; x += STEP) {
+      let nearText = false
+      for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !nearText; dy++)
+        for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !nearText; dx++) {
+          const ny = y + dy, nx = x + dx
+          if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) nearText = true
+        }
+      if (nearText) continue
       const p = (y * W + x) * 4
       rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
     }
   }
+
+  // Fallback: if too few inner pixels (dense text), sample the outer ring instead
+  if (rs.length < 4) {
+    const bx1 = Math.max(0, tx1 - SOLID_RING), by1 = Math.max(0, ty1 - SOLID_RING)
+    const bx2 = Math.min(W - 1, tx2 + SOLID_RING), by2 = Math.min(H - 1, ty2 + SOLID_RING)
+    for (let y = by1; y <= by2; y += STEP) {
+      for (let x = bx1; x <= bx2; x += STEP) {
+        if (textMask[y * W + x] > 0) continue
+        const p = (y * W + x) * 4
+        rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
+      }
+    }
+  }
+
   if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false }
-  const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
-  const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
-  const mr = mean(rs), mg = mean(gs), mb = mean(bs)
+
+  // Mode (binned by 8) for fill color — finds the dominant background value
+  // robustly, ignoring any remaining outliers.
+  const modeBin = (a: number[]) => {
+    const counts = new Map<number, number>()
+    for (const v of a) { const bin = Math.round(v / 8) * 8; counts.set(bin, (counts.get(bin) ?? 0) + 1) }
+    let best = a[0], bestCount = 0
+    for (const [bin, count] of counts) { if (count > bestCount) { bestCount = count; best = bin } }
+    return Math.min(255, best)
+  }
+  const mr = modeBin(rs), mg = modeBin(gs), mb = modeBin(bs)
+  // stddev uses mean — measures spread for solid detection
+  const meanR = mean(rs), meanG = mean(gs), meanB = mean(bs)
   const lum  = mr * 0.299 + mg * 0.587 + mb * 0.114
-  const solid = Math.max(stddev(rs, mr), stddev(gs, mg), stddev(bs, mb)) < SOLID_THRESH
-  return { r: Math.round(mr), g: Math.round(mg), b: Math.round(mb), lum, solid }
+  const solid = Math.max(stddev(rs, meanR), stddev(gs, meanG), stddev(bs, meanB)) < SOLID_THRESH
+  return { r: mr, g: mg, b: mb, lum, solid }
 }
 
 // ── Solid background detection ────────────────────────────────────────────────
@@ -539,16 +614,40 @@ async function processAll(
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
       const { r, g, b } = solidColors.get(i)!
-      const fx1 = Math.max(0, tx1 - BG_PADDING)
-      const fy1 = Math.max(0, ty1 - BG_PADDING)
-      const fx2 = Math.min(W, tx2 + BG_PADDING)
-      const fy2 = Math.min(H, ty2 + BG_PADDING)
-      for (let y = fy1; y <= fy2; y++) {
-        for (let x = fx1; x <= fx2; x++) {
-          // If detection mask available, only overwrite confirmed text pixels
-          if (textMask && textMask[y * W + x] === 0) continue
-          const idx = (y * W + x) * 4
-          outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+      if (textMask) {
+        // Dilate the heatmap mask by HALO_DILATION px to cover white outlines around text strokes.
+        // Then fill only dilated pixels — pixel-precise, follows text contours, no rectangular artifacts.
+        const HALO_DILATION = 3
+        const fx1 = Math.max(0, tx1 - BG_PADDING)
+        const fy1 = Math.max(0, ty1 - BG_PADDING)
+        const fx2 = Math.min(W - 1, tx2 + BG_PADDING)
+        const fy2 = Math.min(H - 1, ty2 + BG_PADDING)
+        for (let y = fy1; y <= fy2; y++) {
+          for (let x = fx1; x <= fx2; x++) {
+            // Check if any pixel within HALO_DILATION radius is a text pixel
+            let hit = false
+            for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !hit; dy++) {
+              for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !hit; dx++) {
+                const ny = y + dy, nx = x + dx
+                if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) hit = true
+              }
+            }
+            if (!hit) continue
+            const idx = (y * W + x) * 4
+            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+          }
+        }
+      } else {
+        // Fallback (no heatmap): fill full padded bounding box
+        const fx1 = Math.max(0, tx1 - BG_PADDING)
+        const fy1 = Math.max(0, ty1 - BG_PADDING)
+        const fx2 = Math.min(W, tx2 + BG_PADDING)
+        const fy2 = Math.min(H, ty2 + BG_PADDING)
+        for (let y = fy1; y <= fy2; y++) {
+          for (let x = fx1; x <= fx2; x++) {
+            const idx = (y * W + x) * 4
+            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+          }
         }
       }
     } else {
