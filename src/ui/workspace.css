@@ -240,6 +240,17 @@
 .ws-inpaint-btn:hover:not(:disabled) { background: #744210; }
 .ws-inpaint-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.ws-revert-all-btn {
+  padding: 7px 16px;
+  background: transparent;
+  border: 1px solid #975a16;
+  border-radius: 4px;
+  color: #f6ad55;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.ws-revert-all-btn:hover { background: rgba(151, 90, 22, 0.2); }
+
 .ws-typeset-btn {
   padding: 7px 16px;
   background: #2c7a7b;
@@ -488,6 +499,17 @@
   font-size: 0.8125rem;
 }
 .ws-lock-btn:hover { background: var(--border); }
+
+.ws-revert-inpaint-btn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid #975a16;
+  border-radius: 4px;
+  color: #f6ad55;
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.ws-revert-inpaint-btn:hover { background: rgba(151, 90, 22, 0.2); }
 
 /* ── Shape select (toolbar + cover section) ───────────────────────────── */
 

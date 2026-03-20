@@ -83,9 +83,10 @@ interface EditorCallbacks {
   onTextChange:  (field: 'raw_ja' | 'translated_zh', value: string) => void
   onLockToggle:  () => void
   onNavigate:    (direction: -1 | 1) => void
-  onCoverChange:   (cover: boolean) => void
-  onOutlineChange: (outline: boolean) => void
-  onShapeChange:   (shape: 'rect' | 'bubble') => void
+  onCoverChange:    (cover: boolean) => void
+  onOutlineChange:  (outline: boolean) => void
+  onShapeChange:    (shape: 'rect' | 'bubble') => void
+  onRevertInpaint?: () => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -172,6 +173,15 @@ function renderEditor(
 
   actions.appendChild(badge)
   actions.appendChild(lockBtn)
+
+  if (callbacks.onRevertInpaint) {
+    const revertBtn = document.createElement('button')
+    revertBtn.type = 'button'
+    revertBtn.className = 'ws-revert-inpaint-btn'
+    revertBtn.textContent = 'Revert Inpaint'
+    revertBtn.addEventListener('click', () => callbacks.onRevertInpaint!())
+    actions.appendChild(revertBtn)
+  }
 
   // Cover section — toggle background fill behind typeset text
   const coverSection = document.createElement('div')
@@ -315,6 +325,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   let sortedIds: string[] = []
   let selectedId: string | null = null
   let pageMask: DetectionMask | null = null
+  // Per-bubble inpaint patches: canvas region captured BEFORE each inpaint run
+  // putImageData restores exactly those pixels — no need to re-detect
+  const inpaintPatches = new Map<string, { data: ImageData; x: number; y: number }>()
 
   // ── Build DOM ──────────────────────────────────────────────────────────────
   container.innerHTML = ''
@@ -569,6 +582,21 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   inpaintBtn.disabled = true
   controls.appendChild(inpaintBtn)
 
+  const revertAllBtn = document.createElement('button')
+  revertAllBtn.type = 'button'
+  revertAllBtn.className = 'ws-revert-all-btn'
+  revertAllBtn.textContent = 'Revert All Inpaint'
+  revertAllBtn.title = 'Clear the entire inpaint canvas — restores original pixels everywhere'
+  controls.appendChild(revertAllBtn)
+
+  revertAllBtn.addEventListener('click', () => {
+    const ctx = inpaintCanvas.getContext('2d')!
+    ctx.clearRect(0, 0, inpaintCanvas.width, inpaintCanvas.height)
+    inpaintPatches.clear()
+    // Re-render editor so "Revert Inpaint" button disappears
+    if (selectedId) selectBubble(selectedId)
+  })
+
   const typesetBtn = document.createElement('button')
   typesetBtn.type = 'button'
   typesetBtn.className = 'ws-typeset-btn'
@@ -714,6 +742,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
           el.setAttribute('ry', String(r))
         }
       },
+      onRevertInpaint: inpaintPatches.has(id) ? () => revertBubbleInpaint(id) : undefined,
     })
   }
 
@@ -750,6 +779,15 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     ocrBtn.disabled = bubbles.length === 0
     inpaintBtn.disabled = bubbles.length === 0
     updateTranslateBtn()
+  }
+
+  // ── Inpaint revert ─────────────────────────────────────────────────────
+
+  function revertBubbleInpaint(id: string): void {
+    const entry = inpaintPatches.get(id)
+    if (!entry) return
+    const ctx = inpaintCanvas.getContext('2d')!
+    ctx.putImageData(entry.data, entry.x, entry.y)
   }
 
   // ── Manual box creation ────────────────────────────────────────────────
@@ -923,6 +961,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
                 el.setAttribute('ry', String(r))
               }
             },
+            onRevertInpaint: inpaintPatches.has(id) ? () => revertBubbleInpaint(id) : undefined,
           })
         }
       } catch (err) {
@@ -1042,9 +1081,24 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       // The original image (img.src / page.imageBlob) is never modified.
       const inpaintBitmap = await createImageBitmap(resultBlob)
       const ctx = inpaintCanvas.getContext('2d')!
-      ctx.clearRect(0, 0, inpaintCanvas.width, inpaintCanvas.height)
-      ctx.drawImage(inpaintBitmap, 0, 0, inpaintCanvas.width, inpaintCanvas.height)
+      const W = inpaintCanvas.width
+      const H = inpaintCanvas.height
+
+      // Save per-bubble patches BEFORE clearing so each bubble can be individually reverted
+      for (const bubble of bubbles) {
+        const bx = Math.floor(bubble.rect.x / 100 * W)
+        const by = Math.floor(bubble.rect.y / 100 * H)
+        const bw = Math.max(1, Math.ceil(bubble.rect.w / 100 * W))
+        const bh = Math.max(1, Math.ceil(bubble.rect.h / 100 * H))
+        inpaintPatches.set(bubble.id, { data: ctx.getImageData(bx, by, bw, bh), x: bx, y: by })
+      }
+
+      ctx.clearRect(0, 0, W, H)
+      ctx.drawImage(inpaintBitmap, 0, 0, W, H)
       inpaintBitmap.close()
+
+      // Re-render editor so "Revert Inpaint" button appears for the selected bubble
+      if (selectedId) selectBubble(selectedId)
 
       statusEl.textContent = `Inpainting complete — ${bubbles.length} bubbles erased`
     } catch (err) {
