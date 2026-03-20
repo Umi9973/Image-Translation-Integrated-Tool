@@ -132,7 +132,7 @@ function sampleBackgroundFromMask(
   W: number, H: number,
   tx1: number, ty1: number, tx2: number, ty2: number,
   textMask: Uint8Array,
-): { r: number; g: number; b: number; lum: number; solid: boolean } {
+): { r: number; g: number; b: number; lum: number; solid: boolean; dilation: number } {
   const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
   const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
   const STEP = 3
@@ -182,17 +182,28 @@ function sampleBackgroundFromMask(
     if (annulusTotal > 0 && annulusBright / annulusTotal > 0.5) HALO_DILATION = 6
   }
 
-  // Sample non-text pixels inside the box, excluding the halo zone
+  // Sample only the narrow band just outside the halo zone — pixels whose
+  // Chebyshev distance to the nearest text stroke is in [HALO_DILATION+1, HALO_DILATION+SAMPLE_BAND].
+  // This is the immediate background neighboring the text, most representative for routing + color.
+  const SAMPLE_BAND = 8
+  const OUTER = HALO_DILATION + SAMPLE_BAND
+  const sx1 = Math.max(0, tx1 - OUTER), sy1 = Math.max(0, ty1 - OUTER)
+  const sx2 = Math.min(W - 1, tx2 + OUTER), sy2 = Math.min(H - 1, ty2 + OUTER)
   const rs: number[] = [], gs: number[] = [], bs: number[] = []
-  for (let y = iy1; y <= iy2; y += STEP) {
-    for (let x = ix1; x <= ix2; x += STEP) {
-      let nearText = false
-      for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !nearText; dy++)
-        for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !nearText; dx++) {
+  for (let y = sy1; y <= sy2; y += STEP) {
+    for (let x = sx1; x <= sx2; x += STEP) {
+      let inHalo = false, inBand = false
+      for (let dy = -OUTER; dy <= OUTER; dy++) {
+        for (let dx = -OUTER; dx <= OUTER; dx++) {
           const ny = y + dy, nx = x + dx
-          if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) nearText = true
+          if (ny < 0 || ny >= H || nx < 0 || nx >= W || textMask[ny * W + nx] === 0) continue
+          const dist = Math.max(Math.abs(dy), Math.abs(dx))
+          if (dist <= HALO_DILATION) { inHalo = true; break }
+          if (dist <= OUTER) inBand = true
         }
-      if (nearText) continue
+        if (inHalo) break
+      }
+      if (inHalo || !inBand) continue
       const p = (y * W + x) * 4
       rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
     }
@@ -211,7 +222,7 @@ function sampleBackgroundFromMask(
     }
   }
 
-  if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false }
+  if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false, dilation: HALO_DILATION }
 
   // Mode (binned by 8) for fill color — finds the dominant background value
   // robustly, ignoring any remaining outliers.
@@ -227,7 +238,7 @@ function sampleBackgroundFromMask(
   const meanR = mean(rs), meanG = mean(gs), meanB = mean(bs)
   const lum  = mr * 0.299 + mg * 0.587 + mb * 0.114
   const solid = Math.max(stddev(rs, meanR), stddev(gs, meanG), stddev(bs, meanB)) < SOLID_THRESH
-  return { r: mr, g: mg, b: mb, lum, solid }
+  return { r: mr, g: mg, b: mb, lum, solid, dilation: HALO_DILATION }
 }
 
 // ── Solid background detection ────────────────────────────────────────────────
@@ -534,7 +545,7 @@ async function processAll(
   // Background text on artwork has dark/colored background → low bright ratio → LaMa.
   type Route = 'white' | 'solid' | 'lama'
   const dbg: object[] = []
-  const solidColors: Map<number, { r: number; g: number; b: number }> = new Map()
+  const solidColors: Map<number, { r: number; g: number; b: number; dilation: number }> = new Map()
   const routes: Route[] = bubbles.map((b, i) => {
     const tx1 = Math.floor((b.rect.x / 100) * W)
     const ty1 = Math.floor((b.rect.y / 100) * H)
@@ -548,7 +559,7 @@ async function processAll(
       if (bg.lum > 220) {
         route = 'white'
       } else if (bg.solid) {
-        solidColors.set(i, bg)
+        solidColors.set(i, { r: bg.r, g: bg.g, b: bg.b, dilation: bg.dilation })
         route = 'solid'
       } else {
         route = 'lama'
@@ -561,7 +572,7 @@ async function processAll(
       } else {
         const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
         if (border.solid) {
-          solidColors.set(i, border)
+          solidColors.set(i, { ...border, dilation: 3 })
           route = 'solid'
         } else {
           route = 'lama'
@@ -613,15 +624,14 @@ async function processAll(
       // ── Solid background → fill with sampled color ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
-      const { r, g, b } = solidColors.get(i)!
+      const { r, g, b, dilation: HALO_DILATION } = solidColors.get(i)!
       if (textMask) {
-        // Dilate the heatmap mask by HALO_DILATION px to cover white outlines around text strokes.
-        // Then fill only dilated pixels — pixel-precise, follows text contours, no rectangular artifacts.
-        const HALO_DILATION = 3
-        const fx1 = Math.max(0, tx1 - BG_PADDING)
-        const fy1 = Math.max(0, ty1 - BG_PADDING)
-        const fx2 = Math.min(W - 1, tx2 + BG_PADDING)
-        const fy2 = Math.min(H - 1, ty2 + BG_PADDING)
+        // Dilate the heatmap mask by HALO_DILATION px (adaptive: 3 or 6 based on detected halo thickness).
+        // Fill boundary also extends by HALO_DILATION so halos outside the tight text box are covered.
+        const fx1 = Math.max(0, tx1 - BG_PADDING - HALO_DILATION)
+        const fy1 = Math.max(0, ty1 - BG_PADDING - HALO_DILATION)
+        const fx2 = Math.min(W - 1, tx2 + BG_PADDING + HALO_DILATION)
+        const fy2 = Math.min(H - 1, ty2 + BG_PADDING + HALO_DILATION)
         for (let y = fy1; y <= fy2; y++) {
           for (let x = fx1; x <= fx2; x++) {
             // Check if any pixel within HALO_DILATION radius is a text pixel

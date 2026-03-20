@@ -57,9 +57,9 @@ Model: `dreMaz/AnimeMangaInpainting / lama_manga_fp32.onnx` (~199 MB). LaMa fine
 
 ### Routing — three-way classification
 **When detection heatmap (`textMask`) is available** — uses `sampleBackgroundFromMask()`:
-- Samples non-text pixels (mask=0) in `SOLID_RING=12px` region around text rect
+- Samples non-text pixels (mask=0) in a narrow band `[HALO_DILATION+1, HALO_DILATION+SAMPLE_BAND=8px]` around text strokes (immediate background, most representative)
 - bgLum > 220 → **`'white'`** (speech bubble)
-- max per-channel stddev < `SOLID_THRESH=65` → **`'solid'`** (uniform background)
+- max per-channel stddev < `SOLID_THRESH=120` → **`'solid'`** (uniform background; 120 catches screentone halftone patterns)
 - Otherwise → **`'lama'`** (complex artwork)
 
 **Fallback (no heatmap)**: `isBrightRegion()` → `'white'`; `sampleBorderColor()` stddev check → `'solid'` or `'lama'`
@@ -73,13 +73,14 @@ Model: `dreMaz/AnimeMangaInpainting / lama_manga_fp32.onnx` (~199 MB). LaMa fine
 Casts `SCAN_SAMPLES=9` rays per edge outward from tight text rect, stops at luminance < `DARK_THRESH=80`. Returns pixel-coordinate expanded bounds `[bx, by, bx2, by2]`.
 
 ### Solid background path — `'solid'`
-1. `sampleBackgroundFromMask()` samples non-text pixels **inside** the text box (not the outer ring), skipping pixels within an adaptive halo dilation radius of any text pixel:
-   - Estimates rough bgLum from inner non-text pixels
-   - If bgLum < 180: checks the 3–6px annulus around text; if >50% of those pixels are bright (lum>200) → thick white halo detected → dilation=6px, else dilation=3px
-   - Uses **mode** (binned by 8) instead of mean for fill color — finds dominant background value, ignores outliers
-   - Falls back to outer ring if too few inner pixels
-2. Fill: dilates textMask by same radius (3 or 6px), overwrites all pixels in dilated zone with sampled color
-3. Fast, no model needed
+1. `sampleBackgroundFromMask()` returns `{ r, g, b, lum, solid, dilation }`:
+   - Estimates rough bgLum from inner non-text pixels (coarse pass)
+   - If bgLum < 180: checks the 3–6px Chebyshev annulus around text strokes; if >50% of annulus pixels have lum>200 → thick white halo → `dilation=6`, else `dilation=3`
+   - Samples the narrow band `[dilation+1, dilation+SAMPLE_BAND]` px from text strokes for fill color
+   - Uses **mode** (binned by 8) instead of mean — dominant background wins, ignores white-halo outliers
+   - Falls back to `SOLID_RING=12px` outer ring if too few band pixels
+2. Fill boundary: `BG_PADDING + dilation` px on all four sides of tight text rect — covers all pixels within the halo radius
+3. Fill: dilates textMask by `dilation` px (Chebyshev), overwrites all hit pixels with sampled color; no model needed
 
 ### Background text path — `'lama'`
 1. Bounds = tight text rect + `BG_PADDING=8px`

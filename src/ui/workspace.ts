@@ -961,9 +961,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     statusEl.textContent = `Typeset ${bubbles.filter(b => b.translated_zh.trim()).length} bubbles`
 
     // Clear previous dot-clip warnings, then re-add for newly clipped bubbles
-    bubbleList.querySelectorAll('.ws-dot-clip-warn').forEach(el => el.remove())
+    listEl.querySelectorAll('.ws-dot-clip-warn').forEach((el: Element) => el.remove())
     for (const id of clippedIds) {
-      const item = bubbleList.querySelector<HTMLElement>(`[data-id="${id}"]`)
+      const item = listEl.querySelector<HTMLElement>(`[data-id="${id}"]`)
       if (!item) continue
       const warn = document.createElement('span')
       warn.className = 'ws-dot-clip-warn'
