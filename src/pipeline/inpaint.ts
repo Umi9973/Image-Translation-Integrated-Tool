@@ -73,10 +73,13 @@ export function inpaintPage(
       bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect })),
     }
     if (textMask) {
-      msg.textMask = textMask.data
+      // Copy before transferring — transfer detaches the buffer, which would
+      // prevent re-running inpaint (e.g. after reverting a bubble)
+      const maskCopy = textMask.data.slice()
+      msg.textMask = maskCopy
       msg.textMaskW = textMask.w
       msg.textMaskH = textMask.h
-      worker.postMessage(msg, { transfer: [textMask.data.buffer] })
+      worker.postMessage(msg, { transfer: [maskCopy.buffer] })
     } else {
       worker.postMessage(msg)
     }
