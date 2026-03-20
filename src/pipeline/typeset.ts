@@ -12,7 +12,74 @@
  */
 
 import type { MangaBubble } from '../types'
-import { loadDefaultSimplifiedChineseParser } from 'budoux'
+import { zhHansModel, Parser } from 'budoux'
+
+// ── Custom BudouX parser (session-scoped, model-clone approach) ───────────────
+//
+// We keep a mutable deep-clone of the SC model.  When the user adds a no-split
+// phrase we inject strong negative BW2 (bigram) scores for every adjacent char
+// pair in the phrase — this prevents BudouX from inserting a break there.
+//
+// BASE-SCORE COMPENSATION
+// BudouX computes baseScore = −0.5 × Σ(all model values) once in the Parser
+// constructor and adds it to every position's score.  Injecting −6000 into BW2
+// lowers the model sum by 6000, raising baseScore by +3000 globally — which
+// partially cancels the protection we just added, and fully cancels a second
+// phrase's protection after one more addition.
+//
+// Fix: BudouX only queries 13 specific group names (UW1–6, BW1–3, TW1–4).
+// Any other group is included in the sum (and thus baseScore) but never looked
+// up during scoring.  We maintain a dummy group 'XX' whose single key tracks
+// the cumulative compensation needed to keep the model sum — and therefore
+// baseScore — exactly equal to the original unmodified model's sum.
+// Each injection that changes the sum by ΔS is offset by −ΔS in XX['∅'],
+// so net sum change is always zero regardless of how many phrases are added.
+
+const PHRASE_SCORE = -6000
+const COMP_GROUP   = 'XX'   // never queried by BudouX scoring
+const COMP_KEY     = '\x00' // single null-byte key, never in real text
+
+type BudouXModel = Record<string, Record<string, number>>
+
+function cloneModel(): BudouXModel {
+  return JSON.parse(JSON.stringify(zhHansModel)) as BudouXModel
+}
+
+let customModel: BudouXModel = cloneModel()
+let zhParser: Parser = new Parser(customModel)
+
+/** Add a no-split phrase to the session parser.
+ *  Injects negative BW2 bigram scores and compensates the model sum so that
+ *  baseScore stays constant — previous phrases are never affected. */
+export function addPhraseToParser(phrase: string): void {
+  if (!phrase || phrase.length < 2) return
+  if (!customModel['BW2'])       customModel['BW2'] = {}
+  if (!customModel[COMP_GROUP])  customModel[COMP_GROUP] = { [COMP_KEY]: 0 }
+
+  let sumChange = 0
+  for (let i = 0; i < phrase.length - 1; i++) {
+    const bigram = phrase[i] + phrase[i + 1]
+    const oldVal = customModel['BW2'][bigram] ?? 0
+    const newVal = Math.min(oldVal, PHRASE_SCORE)
+    if (newVal !== oldVal) {
+      customModel['BW2'][bigram] = newVal
+      sumChange += newVal - oldVal   // always negative
+    }
+  }
+
+  // Offset the sum change so baseScore is unchanged
+  if (sumChange !== 0) {
+    customModel[COMP_GROUP][COMP_KEY] -= sumChange  // adds a positive value
+  }
+
+  zhParser = new Parser(customModel)
+}
+
+/** Reset the session parser back to the unmodified default SC model. */
+export function resetParser(): void {
+  customModel = cloneModel()
+  zhParser = new Parser(customModel)
+}
 
 // ── Vertical punctuation normalisation ───────────────────────────────────────
 
@@ -80,9 +147,6 @@ const DOT_RADIUS  = 2.2  // fixed dot radius (SVG units / canvas px) — same ac
 const DOT_STRIDE  = 9    // fixed vertical step between dot centres — same across all bubbles
 const MIN_FONT    = 8
 
-// BudouX parser — identifies natural phrase boundaries in Simplified Chinese
-const zhParser = loadDefaultSimplifiedChineseParser()
-
 // Title/honorific words that must not start a new column.
 // When BudouX splits "名前先生" → ["名前", "先生"], merge them back so the
 // name+title stays together. This is a general rule, not case-specific.
@@ -103,11 +167,14 @@ function mergetitles(chunks: string[]): string[] {
   return out
 }
 
-// Sentence-final particles that must not open a new column on their own.
-// BudouX sometimes splits them off; merge back into the preceding chunk.
+// Sentence-final particles / aspect markers that must not open a new column
+// on their own. BudouX sometimes splits them off; merge back into the preceding chunk.
+// Includes modal particles (吗/吧/…), exclamations, and common aspect markers
+// (了/过/着/来/去) that BudouX frequently detaches from short verbs.
 const PARTICLES = new Set([
   '吗', '呢', '吧', '啊', '嘛', '哦', '哈', '呀', '哟', '咧', '啦', '喔',
   '唉', '噢', '嗯', '哎', '哇', '呵', '嗨', '哼',
+  '了', '过', '着', '来', '去', '得', '地', '的',
 ])
 
 function mergeparticles(chunks: string[]): string[] {
@@ -217,9 +284,9 @@ function packChunks(
  * Each segment (split on '\') is parsed into BudouX chunks independently,
  * then packed greedily. Returns the font size and the packed columns per segment.
  */
-// Allow dots to exceed bubble height by this factor before clipping.
-// 1.5 = 50% overflow tolerated; raise to show more dots, lower to clip sooner.
-const DOT_OVERFLOW_FACTOR = 1.5
+// Max dots that fit exactly within the bubble height (no overflow).
+// Rendering is also clipped to the bubble rect, so this is just the packing limit.
+const DOT_OVERFLOW_FACTOR = 1.0
 
 function fitVertical(
   segChunks: string[][],
@@ -246,17 +313,45 @@ function fitVertical(
   // allowed height (innerH × DOT_OVERFLOW_FACTOR) when each dot takes DOT_STRIDE px.
   const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / DOT_STRIDE))
 
+  // Standard pass: largest font whose columns fit the bubble width.
+  let best: { fontSize: number; segColumns: string[][]; truncated: boolean } | null = null
   for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
     const charsPerCol = Math.max(1, Math.floor(innerH / fs))
-    // Skip this font size if it would force a hard-split of an indivisible chunk
     if (charsPerCol < maxChunkLen) continue
     const packed      = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold))
     const segColumns  = packed.map(p => p.cols)
     const truncated   = packed.some(p => p.truncated)
     const numCols     = segColumns.reduce((s, cols) => s + cols.length, 0)
     const totalW      = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
-    if (totalW <= innerW) return { fontSize: fs, segColumns, truncated }
+    if (totalW <= innerW) { best = { fontSize: fs, segColumns, truncated }; break }
   }
+
+  // Single-column preference for short text.
+  // Guards: single segment (no '\' break), total chars ≤ 5, bubble taller than wide,
+  // result font ≥ 12px, and maxChunkLen respected.
+  // Without these guards: long text shrinks to unreadable, wide bubbles get a
+  // thin strip, forced '\' breaks get ignored, and indivisible chunks hard-split.
+  const totalChars = segChunks.flat().reduce((s, c) => s + (c.includes('・') ? 0 : c.length), 0)
+  if (
+    best !== null &&
+    best.segColumns.reduce((s, cols) => s + cols.length, 0) > 1 &&
+    segChunks.length === 1 &&          // no '\' forced breaks
+    totalChars <= 5 &&                 // genuinely short
+    innerH > innerW                    // taller than wide — column bubble
+  ) {
+    for (let fs = best.fontSize - 1; fs >= Math.max(MIN_FONT, 12); fs--) {
+      const charsPerCol = Math.max(1, Math.floor(innerH / fs))
+      if (charsPerCol < maxChunkLen) continue
+      const packed     = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold))
+      const segColumns = packed.map(p => p.cols)
+      const truncated  = packed.some(p => p.truncated)
+      const numCols    = segColumns.reduce((s, cols) => s + cols.length, 0)
+      const totalW     = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
+      if (totalW <= innerW && numCols === 1) return { fontSize: fs, segColumns, truncated }
+    }
+  }
+
+  if (best) return best
 
   // Fallback: minimum font, may overflow — still respect maxChunkLen to avoid hard-splits
   const charsPerCol  = Math.max(maxChunkLen, Math.max(1, Math.floor(innerH / MIN_FONT)))
@@ -299,7 +394,10 @@ export function renderTypesetToCanvas(
     const segments = splitSegments(raw)
     if (segments.length === 0) continue
 
-    const segChunks = segments.map(seg => mergedots(mergeparticles(mergetitles(zhParser.parse(normalizeVertical(seg))))))
+    const segChunks = segments.map(seg => {
+      const normalized = normalizeVertical(seg)
+      return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
+    })
 
     const layoutRect = bubble.bubble_rect ?? bubble.rect
     const bx = (layoutRect.x / 100) * W
@@ -339,6 +437,10 @@ export function renderTypesetToCanvas(
     }
 
     ctx.save()
+    // Clip canvas to bubble rect so dots/text never bleed outside
+    ctx.beginPath()
+    ctx.rect(bx, by, bw, bh)
+    ctx.clip()
     ctx.font         = `${fontSize}px ${FONT_FAMILY}`
     ctx.textBaseline = 'top'
     ctx.textAlign    = 'center'
@@ -361,10 +463,14 @@ export function renderTypesetToCanvas(
 
           if (ch === '・') {
             // Draw as a geometric circle centred in the DOT_STRIDE slot.
+            // SVG uses paint-order:stroke so only the outer half of the stroke
+            // (strokeWidth/2) is visible beyond the fill. Match that here.
+            // Also cap at DOT_STRIDE*0.45 so adjacent dots never overlap.
             const dotCy = y + DOT_STRIDE * 0.5
+            const outerR = Math.min(DOT_STRIDE * 0.45, DOT_RADIUS + strokeWidth * 0.5)
             ctx.save()
             ctx.beginPath()
-            ctx.arc(cx, dotCy, DOT_RADIUS + strokeWidth, 0, Math.PI * 2)
+            ctx.arc(cx, dotCy, outerR, 0, Math.PI * 2)
             ctx.fillStyle = 'white'
             ctx.fill()
             ctx.beginPath()
@@ -443,7 +549,10 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
 
     // Parse each segment into BudouX chunks, then merge title words so
     // name+title (e.g. 奈良先生) stays in one column.
-    const segChunks = segments.map(seg => mergedots(mergeparticles(mergetitles(zhParser.parse(normalizeVertical(seg))))))
+    const segChunks = segments.map(seg => {
+      const normalized = normalizeVertical(seg)
+      return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
+    })
 
     // Use expanded bubble interior rect if available (set after inpainting),
     // otherwise fall back to the tight text rect from detection.
@@ -487,7 +596,20 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
       svg.appendChild(bg)
     }
 
+    // Clip group to bubble rect so dots and text never bleed outside
+    const clipId = `bc-${bubble.id}`
+    const clipPath = document.createElementNS(ns, 'clipPath')
+    clipPath.setAttribute('id', clipId)
+    const clipRect = document.createElementNS(ns, 'rect')
+    clipRect.setAttribute('x',      String(bx))
+    clipRect.setAttribute('y',      String(by))
+    clipRect.setAttribute('width',  String(bw))
+    clipRect.setAttribute('height', String(bh))
+    clipPath.appendChild(clipRect)
+    svg.appendChild(clipPath)
+
     const g = document.createElementNS(ns, 'g')
+    g.setAttribute('clip-path',    `url(#${clipId})`)
     g.setAttribute('font-family',  FONT_FAMILY)
     g.setAttribute('font-size',    String(fontSize))
     // White outline behind black fill — standard manga typesetting look

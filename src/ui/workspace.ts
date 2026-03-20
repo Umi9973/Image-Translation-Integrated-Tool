@@ -7,6 +7,7 @@ import { loadAPIConfig, buildPrompt, translatePage, parseTranslationResponse } f
 import { inpaintPage } from '../pipeline/inpaint'
 import { renderTypeset, renderTypesetToCanvas } from '../pipeline/typeset'
 import { openSettings } from './settings'
+import { renderDictPanel, getGlossary } from './dict-panel'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -348,7 +349,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   content.className = 'ws-content'
   root.appendChild(content)
 
-  // Left: image viewer
+  // Left: dictionary panel
+  const dictPanel = document.createElement('div')
+  dictPanel.className = 'ws-dict-panel'
+  content.appendChild(dictPanel)
+  renderDictPanel(dictPanel)
+
+  // Centre: image viewer
   const viewer = document.createElement('div')
   viewer.className = 'ws-viewer'
   content.appendChild(viewer)
@@ -953,6 +960,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         config.providerId,
         config.key,
         stage => { statusEl.textContent = stage },
+        getGlossary(),
       )
       for (const { id, translated_zh } of results) {
         const bubble = bubbles.find(b => b.id === id)
@@ -976,7 +984,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   copyPromptBtn.addEventListener('click', async () => {
     const ocrBubbles = bubbles.filter(b => b.raw_ja.length > 0)
     try {
-      await navigator.clipboard.writeText(buildPrompt(ocrBubbles))
+      await navigator.clipboard.writeText(buildPrompt(ocrBubbles, getGlossary()))
       statusEl.textContent = 'Prompt copied — paste it in your AI chat, then click "Paste Response"'
     } catch {
       statusEl.textContent = 'Clipboard write failed — check browser permissions'

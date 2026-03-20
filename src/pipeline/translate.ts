@@ -1,5 +1,7 @@
 import type { MangaBubble } from '../types'
 
+export interface GlossaryEntry { ja: string; zh: string }
+
 export interface ProviderDef {
   id: string
   name: string
@@ -58,12 +60,16 @@ export function clearAPIConfig(): void {
 
 // ── Prompt building ────────────────────────────────────────────────────────
 
-export function buildPrompt(bubbles: MangaBubble[]): string {
+export function buildPrompt(bubbles: MangaBubble[], glossary?: GlossaryEntry[]): string {
   const bubblesJson = JSON.stringify(
     bubbles.map(b => ({ id: b.id, text: b.raw_ja })),
     null,
     2,
   )
+
+  const glossarySection = glossary && glossary.length > 0
+    ? `\n## Glossary (translate these terms exactly — do not deviate)\n${glossary.map(e => `${e.ja} → ${e.zh}`).join('\n')}\n`
+    : ''
 
   return `You are a professional manga scanlator specialising in Japanese-to-Chinese translation.
 
@@ -88,9 +94,11 @@ Translate every bubble. Rules:
 - Do NOT add explanations, footnotes, or translator notes inside translated_zh
 - If a translation has a natural phrase break (e.g. between clauses or sentences), insert the two characters \\ (escaped backslash — this is required for valid JSON) at the break point. Use at most one or two breaks per bubble. Do not add a break if the text flows naturally as one unit. Example: "我来了\\\\让我们走" (the rendered break character is \\).
 
-Output a valid JSON array immediately after your style commitment comment, and nothing else after it:
+Output a valid JSON array wrapped in a \`\`\`json code block immediately after your style commitment comment, and nothing else after it:
+\`\`\`json
 [{ "id": "<bubble_id>", "translated_zh": "<chinese translation>" }, ...]
-
+\`\`\`
+${glossarySection}
 ## Bubbles
 ${bubblesJson}`
 }
@@ -106,6 +114,10 @@ function fixBackslashes(json: string): string {
 export function parseTranslationResponse(
   text: string,
 ): { id: string; translated_zh: string }[] {
+  // Strip ```json ... ``` fences if present
+  const fenced = text.match(/```json\s*([\s\S]*?)```/)
+  if (fenced) text = fenced[1].trim()
+
   // Try from last '[' — model may prefix style notes before the JSON array
   const lastBracket = text.lastIndexOf('[')
   if (lastBracket !== -1) {
@@ -134,6 +146,7 @@ export async function translatePage(
   providerId: string,
   apiKey: string,
   onProgress?: (stage: string) => void,
+  glossary?: GlossaryEntry[],
 ): Promise<{ id: string; translated_zh: string }[]> {
   const provider = TRANSLATION_PROVIDERS.find(p => p.id === providerId)
   if (!provider) throw new Error(`Unknown provider: ${providerId}`)
@@ -148,7 +161,7 @@ export async function translatePage(
     },
     body: JSON.stringify({
       model: provider.model,
-      messages: [{ role: 'user', content: buildPrompt(bubbles) }],
+      messages: [{ role: 'user', content: buildPrompt(bubbles, glossary) }],
       temperature: 0.3,
     }),
   })

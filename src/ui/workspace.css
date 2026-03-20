@@ -283,6 +283,7 @@
 
 .ws-preview-mode .ws-bubble-overlay { display: none; }
 .ws-preview-mode .ws-panel { display: none; }
+.ws-preview-mode .ws-dict-panel { display: none; }
 
 .ws-detect-status {
   font-size: 0.8125rem;
@@ -524,4 +525,114 @@
   gap: 8px;
   padding-left: 20px;
 }
+
+/* ── Dictionary panel (left sidebar) ─────────────────────────────────────── */
+
+.ws-dict-panel {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ws-dict-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ws-dict-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text);
+}
+
+.ws-dict-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.ws-dict-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-family: inherit;
+}
+.ws-dict-input:focus { outline: none; border-color: var(--accent); }
+.ws-dict-input--half { min-width: 56px; }
+
+.ws-dict-add-btn {
+  padding: 4px 9px;
+  background: var(--accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.ws-dict-add-btn:hover { opacity: 0.85; }
+
+.ws-dict-list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.ws-dict-empty {
+  padding: 16px 10px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.5;
+}
+
+.ws-dict-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ws-dict-item:hover { background: var(--bg); }
+
+.ws-dict-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
+  color: var(--text);
+}
+
+.ws-dict-reset-btn {
+  display: block;
+  width: calc(100% - 16px);
+  margin: 8px 8px 4px;
+  padding: 4px 0;
+  background: transparent;
+  border: 1px solid #e53e3e55;
+  border-radius: 4px;
+  color: #fc8181;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.ws-dict-reset-btn:hover { background: rgba(229, 62, 62, 0.12); }
 
