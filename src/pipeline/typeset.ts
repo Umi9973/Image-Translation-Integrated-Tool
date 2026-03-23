@@ -636,6 +636,10 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
       truncated,
     })
 
+    // Wrapper group — lets workspace remove one bubble's typeset by data-bubble-id
+    const bubbleGroup = document.createElementNS(ns, 'g')
+    bubbleGroup.setAttribute('data-bubble-id', bubble.id)
+
     if (bubble.cover || bubble.source === 'manual') {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
       const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
@@ -653,7 +657,7 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
       } else {
         bg.setAttribute('stroke', 'none')
       }
-      svg.appendChild(bg)
+      bubbleGroup.appendChild(bg)
     }
 
     // Clip group to bubble rect so dots and text never bleed outside
@@ -666,7 +670,7 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     clipRect.setAttribute('width',  String(bw))
     clipRect.setAttribute('height', String(bh))
     clipPath.appendChild(clipRect)
-    svg.appendChild(clipPath)
+    bubbleGroup.appendChild(clipPath)
 
     const g = document.createElementNS(ns, 'g')
     g.setAttribute('clip-path',    `url(#${clipId})`)
@@ -724,7 +728,8 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
       }
     }
 
-    svg.appendChild(g)
+    bubbleGroup.appendChild(g)
+    svg.appendChild(bubbleGroup)
   }
 
   fetch('/__debug/typeset', {

@@ -240,6 +240,17 @@
 .ws-inpaint-btn:hover:not(:disabled) { background: #744210; }
 .ws-inpaint-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+.ws-revert-all-typeset-btn {
+  padding: 7px 16px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.ws-revert-all-typeset-btn:hover { background: rgba(124, 92, 252, 0.15); }
+
 .ws-revert-all-btn {
   padding: 7px 16px;
   background: transparent;
@@ -499,6 +510,17 @@
   font-size: 0.8125rem;
 }
 .ws-lock-btn:hover { background: var(--border); }
+
+.ws-revert-typeset-btn {
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.ws-revert-typeset-btn:hover { background: rgba(124, 92, 252, 0.15); }
 
 .ws-revert-inpaint-btn {
   padding: 5px 10px;

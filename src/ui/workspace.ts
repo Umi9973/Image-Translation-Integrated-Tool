@@ -86,7 +86,8 @@ interface EditorCallbacks {
   onCoverChange:    (cover: boolean) => void
   onOutlineChange:  (outline: boolean) => void
   onShapeChange:    (shape: 'rect' | 'bubble') => void
-  onRevertInpaint?: () => void
+  onRevertInpaint?:  () => void
+  onRevertTypeset?:  () => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -180,6 +181,15 @@ function renderEditor(
     revertBtn.className = 'ws-revert-inpaint-btn'
     revertBtn.textContent = 'Revert Inpaint'
     revertBtn.addEventListener('click', () => callbacks.onRevertInpaint!())
+    actions.appendChild(revertBtn)
+  }
+
+  if (callbacks.onRevertTypeset) {
+    const revertBtn = document.createElement('button')
+    revertBtn.type = 'button'
+    revertBtn.className = 'ws-revert-typeset-btn'
+    revertBtn.textContent = 'Revert Typeset'
+    revertBtn.addEventListener('click', () => callbacks.onRevertTypeset!())
     actions.appendChild(revertBtn)
   }
 
@@ -604,6 +614,18 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   typesetBtn.disabled = true
   controls.appendChild(typesetBtn)
 
+  const revertAllTypesetBtn = document.createElement('button')
+  revertAllTypesetBtn.type = 'button'
+  revertAllTypesetBtn.className = 'ws-revert-all-typeset-btn'
+  revertAllTypesetBtn.textContent = 'Revert All Typeset'
+  revertAllTypesetBtn.title = 'Clear all typeset text from the SVG layer'
+  controls.appendChild(revertAllTypesetBtn)
+
+  revertAllTypesetBtn.addEventListener('click', () => {
+    while (typesetSvg.firstChild) typesetSvg.removeChild(typesetSvg.firstChild)
+    if (selectedId) selectBubble(selectedId)
+  })
+
   const previewBtn = document.createElement('button')
   previewBtn.type = 'button'
   previewBtn.className = 'ws-preview-btn'
@@ -743,6 +765,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         }
       },
       onRevertInpaint: inpaintPatches.has(id) ? () => revertBubbleInpaint(id) : undefined,
+      onRevertTypeset: typesetSvg.querySelector(`[data-bubble-id="${id}"]`)
+        ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
+        : undefined,
     })
   }
 
@@ -962,6 +987,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
               }
             },
             onRevertInpaint: inpaintPatches.has(id) ? () => revertBubbleInpaint(id) : undefined,
+            onRevertTypeset: typesetSvg.querySelector(`[data-bubble-id="${id}"]`)
+              ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
+              : undefined,
           })
         }
       } catch (err) {
@@ -1128,5 +1156,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       warn.textContent = '⚠ dots clipped'
       item.appendChild(warn)
     }
+
+    // Re-render editor so "Revert Typeset" button appears for the selected bubble
+    if (selectedId) selectBubble(selectedId)
   })
 }
