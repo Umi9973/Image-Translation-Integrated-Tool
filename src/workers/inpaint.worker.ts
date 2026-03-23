@@ -34,6 +34,9 @@ import * as ort from 'onnxruntime-web'
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.2/dist/'
 
+// Set to true to re-enable LaMa background reconstruction (requires 199 MB model download).
+const LAMA_ENABLED  = false
+
 const MODEL_URL     = '/lama_manga_fp32.onnx'
 const OPFS_FILENAME = 'lama_manga_fp32.onnx'
 const LAMA_SIZE       = 512
@@ -558,7 +561,7 @@ async function processAll(
       dbgExtra = { maskUsed: true, bgLum: +bg.lum.toFixed(1), bgSolid: bg.solid, bgRgb: [bg.r, bg.g, bg.b] }
       if (bg.lum > 220) {
         route = 'white'
-      } else if (bg.solid) {
+      } else if (bg.solid || !LAMA_ENABLED) {
         solidColors.set(i, { r: bg.r, g: bg.g, b: bg.b, dilation: bg.dilation })
         route = 'solid'
       } else {
@@ -571,7 +574,7 @@ async function processAll(
         route = 'white'
       } else {
         const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
-        if (border.solid) {
+        if (border.solid || !LAMA_ENABLED) {
           solidColors.set(i, { ...border, dilation: 3 })
           route = 'solid'
         } else {
