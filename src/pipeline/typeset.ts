@@ -139,13 +139,14 @@ function computeRxRy(w: number, h: number, shape: 'rect' | 'bubble' | undefined)
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const FONT_FAMILY = "'ZCOOL KuaiLe', 'Microsoft YaHei', 'PingFang SC', sans-serif"
-const PADDING     = 6    // px inside bubble rect (SVG user units = natural image px)
-const COL_GAP     = 4    // px gap between vertical columns
-const MAX_FONT    = 72
-const DOT_RADIUS  = 2.2  // fixed dot radius (SVG units / canvas px) — same across all bubbles
-const DOT_STRIDE  = 9    // fixed vertical step between dot centres — same across all bubbles
-const MIN_FONT    = 8
+const FONT_FAMILY        = "'ZCOOL KuaiLe', 'Microsoft YaHei', 'PingFang SC', sans-serif"
+const PADDING            = 6    // px inside bubble rect (SVG user units = natural image px)
+const COL_GAP            = 4    // px gap between vertical columns
+const MAX_FONT           = 72
+const DOT_RADIUS         = 2.2  // fixed dot radius (SVG units / canvas px) — same across all bubbles
+const DOT_STRIDE         = 9    // fixed vertical step between dot centres — same across all bubbles
+const MIN_FONT           = 8
+const DOT_SPLIT_THRESHOLD = 16  // if font < this after layout, retry with word+dot chunks split
 
 // Title/honorific words that must not start a new column.
 // When BudouX splits "名前先生" → ["名前", "先生"], merge them back so the
@@ -191,6 +192,39 @@ function mergeparticles(chunks: string[]): string[] {
 
 function isDotRun(s: string): boolean {
   return s.length > 0 && [...s].every(c => c === '・')
+}
+
+/**
+ * Split chunks that have exactly one dot/non-dot transition:
+ *   "word・・・" → ["word", "・・・"]
+ *   "・・・word" → ["・・・", "word"]
+ * Chunks with 0 or 2+ transitions (e.g. "・・・word・・・") are left whole
+ * to preserve deliberate dot-word-dot stylistic patterns.
+ * Only called when the initial layout font is below DOT_SPLIT_THRESHOLD.
+ */
+function splitdots(chunks: string[]): string[] {
+  const out: string[] = []
+  for (const chunk of chunks) {
+    if (!chunk.includes('・')) { out.push(chunk); continue }
+    // Count transitions between dot and non-dot characters
+    let transitions = 0
+    let prevIsDot = chunk[0] === '・'
+    for (let i = 1; i < chunk.length; i++) {
+      const isDot = chunk[i] === '・'
+      if (isDot !== prevIsDot) { transitions++; prevIsDot = isDot }
+    }
+    if (transitions !== 1) { out.push(chunk); continue }
+    // Split at the single transition
+    let cur = ''
+    prevIsDot = chunk[0] === '・'
+    for (const ch of chunk) {
+      const isDot = ch === '・'
+      if (isDot !== prevIsDot) { out.push(cur); cur = ch; prevIsDot = isDot }
+      else cur += ch
+    }
+    if (cur) out.push(cur)
+  }
+  return out
 }
 
 /**
@@ -401,7 +435,11 @@ export function renderTypesetToCanvas(
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
-    const { fontSize, segColumns } = fitVertical(segChunks, bw, bh)
+    let { fontSize, segColumns } = fitVertical(segChunks, bw, bh)
+    if (fontSize < DOT_SPLIT_THRESHOLD) {
+      const alt = fitVertical(segChunks.map(splitdots), bw, bh)
+      if (alt.fontSize > fontSize) ({ fontSize, segColumns } = alt)
+    }
     const colStride = fontSize + COL_GAP
 
     const numCols   = segColumns.reduce((s, cols) => s + cols.length, 0)
@@ -561,7 +599,11 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
-    const { fontSize, segColumns, truncated } = fitVertical(segChunks, bw, bh)
+    let { fontSize, segColumns, truncated } = fitVertical(segChunks, bw, bh)
+    if (fontSize < DOT_SPLIT_THRESHOLD) {
+      const alt = fitVertical(segChunks.map(splitdots), bw, bh)
+      if (alt.fontSize > fontSize) ({ fontSize, segColumns, truncated } = alt)
+    }
     if (truncated) clippedIds.push(bubble.id)
     const colStride = fontSize + COL_GAP
 
