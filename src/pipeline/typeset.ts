@@ -194,35 +194,15 @@ function isDotRun(s: string): boolean {
 }
 
 /**
- * Keep dot runs (・・・…) in the same column as adjacent words.
- * Two passes:
- *   1. Merge any BudouX-split dot chunks back into one run.
- *   2. Attach dot runs to adjacent word chunks — trailing dots join the
- *      preceding word; leading dots join the following word.
- * Result: the combined "word+dots" or "dots+word" is one chunk that
- * packChunks will never break across columns.
+ * Merge any BudouX-split dot chunks back into one contiguous run.
+ * Dot runs are kept whole (never internally split) but are NOT attached to
+ * adjacent word chunks — packChunks may place them in their own column.
  */
 function mergedots(chunks: string[]): string[] {
-  // Pass 1: re-join any consecutive all-dot chunks BudouX may have split
-  const merged: string[] = []
-  for (const chunk of chunks) {
-    if (merged.length > 0 && isDotRun(chunk) && isDotRun(merged[merged.length - 1])) {
-      merged[merged.length - 1] += chunk
-    } else {
-      merged.push(chunk)
-    }
-  }
-  // Pass 2: attach each dot run to its adjacent word chunk
   const out: string[] = []
-  for (const chunk of merged) {
-    if (isDotRun(chunk)) {
-      if (out.length > 0) {
-        out[out.length - 1] += chunk   // trailing dots → attach to preceding word
-      } else {
-        out.push(chunk)                // leading dots — held until next word
-      }
-    } else if (out.length > 0 && isDotRun(out[out.length - 1])) {
-      out[out.length - 1] += chunk    // word after leading dots → merge in
+  for (const chunk of chunks) {
+    if (out.length > 0 && isDotRun(chunk) && isDotRun(out[out.length - 1])) {
+      out[out.length - 1] += chunk
     } else {
       out.push(chunk)
     }
