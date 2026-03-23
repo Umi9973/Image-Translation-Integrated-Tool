@@ -146,7 +146,7 @@ const MAX_FONT           = 72
 const DOT_RADIUS         = 2.2  // fixed dot radius (SVG units / canvas px) — same across all bubbles
 const DOT_STRIDE         = 9    // fixed vertical step between dot centres — same across all bubbles
 const MIN_FONT           = 8
-const DOT_SPLIT_THRESHOLD = 16  // if font < this after layout, retry with word+dot chunks split
+const DOT_SPLIT_THRESHOLD = 24  // if font < this after layout, retry with word+dot chunks split
 
 // Title/honorific words that must not start a new column.
 // When BudouX splits "名前先生" → ["名前", "先生"], merge them back so the
