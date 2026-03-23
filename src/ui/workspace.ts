@@ -88,6 +88,7 @@ interface EditorCallbacks {
   onShapeChange:    (shape: 'rect' | 'bubble') => void
   onRevertInpaint?:  () => void
   onRevertTypeset?:  () => void
+  onFontSizeOverrideChange: (size: number | undefined) => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -232,10 +233,52 @@ function renderEditor(
   coverSection.appendChild(coverLabel)
   coverSection.appendChild(coverControls)
 
+  // Font size override row
+  const fontSizeRow = document.createElement('div')
+  fontSizeRow.className = 'ws-font-size-row'
+
+  const fontSizeLabel = document.createElement('span')
+  fontSizeLabel.className = 'ws-editor-label'
+  fontSizeLabel.textContent = 'Font size'
+
+  const fontSizeInput = document.createElement('input')
+  fontSizeInput.type = 'number'
+  fontSizeInput.className = 'ws-font-size-input'
+  fontSizeInput.min = '8'
+  fontSizeInput.max = '72'
+  fontSizeInput.placeholder = 'auto'
+  if (bubble.font_size_override !== undefined) fontSizeInput.value = String(bubble.font_size_override)
+  fontSizeInput.addEventListener('change', () => {
+    const v = parseInt(fontSizeInput.value, 10)
+    if (isNaN(v) || fontSizeInput.value.trim() === '') {
+      fontSizeInput.value = ''
+      callbacks.onFontSizeOverrideChange(undefined)
+    } else {
+      const clamped = Math.max(8, Math.min(72, v))
+      fontSizeInput.value = String(clamped)
+      callbacks.onFontSizeOverrideChange(clamped)
+    }
+  })
+
+  const fontSizeClearBtn = document.createElement('button')
+  fontSizeClearBtn.type = 'button'
+  fontSizeClearBtn.className = 'ws-font-size-clear'
+  fontSizeClearBtn.textContent = '×'
+  fontSizeClearBtn.title = 'Reset to auto'
+  fontSizeClearBtn.addEventListener('click', () => {
+    fontSizeInput.value = ''
+    callbacks.onFontSizeOverrideChange(undefined)
+  })
+
+  fontSizeRow.appendChild(fontSizeLabel)
+  fontSizeRow.appendChild(fontSizeInput)
+  fontSizeRow.appendChild(fontSizeClearBtn)
+
   editor.appendChild(jaLabel)
   editor.appendChild(jaTextarea)
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
+  editor.appendChild(fontSizeRow)
   editor.appendChild(coverSection)
   editor.appendChild(nav)
   editor.appendChild(actions)
@@ -770,6 +813,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onRevertTypeset: typesetSvg.querySelector(`[data-bubble-id="${id}"]`)
         ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
         : undefined,
+      onFontSizeOverrideChange(size) { bubble.font_size_override = size },
     })
   }
 
@@ -992,6 +1036,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
             onRevertTypeset: typesetSvg.querySelector(`[data-bubble-id="${id}"]`)
               ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
               : undefined,
+            onFontSizeOverrideChange(size) { bubble.font_size_override = size },
           })
         }
       } catch (err) {

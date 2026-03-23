@@ -313,9 +313,23 @@ function fitVertical(
   maxW: number,
   maxH: number,
   forceDotColumn = false,
+  forcedFontSize?: number,
 ): { fontSize: number; segColumns: string[][]; truncated: boolean } {
   const innerW = maxW - PADDING * 2
   const innerH = maxH - PADDING * 2
+
+  // Forced font: skip auto-fit, use the exact size the user chose.
+  if (forcedFontSize !== undefined) {
+    const fs = Math.max(MIN_FONT, forcedFontSize)
+    const charsPerCol  = Math.max(1, Math.floor(innerH / fs))
+    const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / (fs * DOT_STRIDE_FACTOR)))
+    const packed = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold, forceDotColumn))
+    return {
+      fontSize:   fs,
+      segColumns: packed.map(p => p.cols),
+      truncated:  packed.some(p => p.truncated),
+    }
+  }
 
   // Longest chunk that must not be hard-split across columns.
   // Protects two categories:
@@ -441,9 +455,12 @@ export function renderTypesetToCanvas(
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
-    let { fontSize, segColumns } = fitVertical(segChunks, bw, bh)
-    const alt = fitVertical(segChunks.map(splitdots), bw, bh, true)
-    if (alt.fontSize > fontSize) ({ fontSize, segColumns } = alt)
+    const override = bubble.font_size_override
+    let { fontSize, segColumns, truncated: trunc0 } = fitVertical(segChunks, bw, bh, false, override)
+    const alt = fitVertical(segChunks.map(splitdots), bw, bh, true, override)
+    if (alt.fontSize > fontSize || (alt.fontSize === fontSize && !alt.truncated && trunc0)) {
+      ;({ fontSize, segColumns } = alt)
+    }
     const colStride = fontSize + COL_GAP
 
     const numCols   = segColumns.reduce((s, cols) => s + cols.length, 0)
@@ -601,10 +618,11 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
-    const initialFit = fitVertical(segChunks, bw, bh)
+    const override = bubble.font_size_override
+    const initialFit = fitVertical(segChunks, bw, bh, false, override)
     let { fontSize, segColumns, truncated } = initialFit
-    const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true)
-    const splitDotsApplied = altFit.fontSize > fontSize
+    const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true, override)
+    const splitDotsApplied = altFit.fontSize > fontSize || (altFit.fontSize === fontSize && !altFit.truncated && truncated)
     if (splitDotsApplied) ({ fontSize, segColumns, truncated } = altFit)
     if (truncated) clippedIds.push(bubble.id)
     const colStride = fontSize + COL_GAP
