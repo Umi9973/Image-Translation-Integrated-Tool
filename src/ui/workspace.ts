@@ -105,6 +105,7 @@ function renderEditor(
   idx: number,
   total: number,
   callbacks: EditorCallbacks,
+  computedFontSize?: number,
 ): void {
   container.innerHTML = ''
   const locked = bubble.is_locked
@@ -246,12 +247,12 @@ function renderEditor(
   fontSizeInput.className = 'ws-font-size-input'
   fontSizeInput.min = '8'
   fontSizeInput.max = '72'
-  fontSizeInput.placeholder = 'auto'
-  if (bubble.font_size_override !== undefined) fontSizeInput.value = String(bubble.font_size_override)
+  const displaySize = bubble.font_size_override ?? computedFontSize
+  if (displaySize !== undefined) fontSizeInput.value = String(displaySize)
   fontSizeInput.addEventListener('change', () => {
     const v = parseInt(fontSizeInput.value, 10)
     if (isNaN(v) || fontSizeInput.value.trim() === '') {
-      fontSizeInput.value = ''
+      fontSizeInput.value = computedFontSize !== undefined ? String(computedFontSize) : ''
       callbacks.onFontSizeOverrideChange(undefined)
     } else {
       const clamped = Math.max(8, Math.min(72, v))
@@ -266,7 +267,7 @@ function renderEditor(
   fontSizeClearBtn.textContent = '×'
   fontSizeClearBtn.title = 'Reset to auto'
   fontSizeClearBtn.addEventListener('click', () => {
-    fontSizeInput.value = ''
+    fontSizeInput.value = computedFontSize !== undefined ? String(computedFontSize) : ''
     callbacks.onFontSizeOverrideChange(undefined)
   })
 
@@ -381,6 +382,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   // Per-bubble inpaint patches: canvas region captured BEFORE each inpaint run
   // putImageData restores exactly those pixels — no need to re-detect
   const inpaintPatches = new Map<string, { data: ImageData; x: number; y: number }>()
+  const computedFontSizes: Record<string, number> = {}
 
   // ── Build DOM ──────────────────────────────────────────────────────────────
   container.innerHTML = ''
@@ -814,7 +816,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
         : undefined,
       onFontSizeOverrideChange(size) { bubble.font_size_override = size },
-    })
+    }, computedFontSizes[id])
   }
 
   // ── Delete bubble ──────────────────────────────────────────────────────────
@@ -1037,7 +1039,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
               ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
               : undefined,
             onFontSizeOverrideChange(size) { bubble.font_size_override = size },
-          })
+          }, computedFontSizes[id])
         }
       } catch (err) {
         console.error(`OCR failed for bubble ${id}:`, err)
@@ -1189,7 +1191,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   // ── Typeset All button ─────────────────────────────────────────────────────
 
   typesetBtn.addEventListener('click', () => {
-    const clippedIds = renderTypeset(bubbles, typesetSvg)
+    const { clippedIds, fontSizes } = renderTypeset(bubbles, typesetSvg)
+    Object.assign(computedFontSizes, fontSizes)
     statusEl.textContent = `Typeset ${bubbles.filter(b => b.translated_zh.trim()).length} bubbles`
 
     // Clear previous dot-clip warnings, then re-add for newly clipped bubbles

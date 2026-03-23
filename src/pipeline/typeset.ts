@@ -579,16 +579,20 @@ export function renderTypesetToCanvas(
  * Returns the IDs of bubbles where dot runs were silently clipped because
  * they exceeded DOT_OVERFLOW_FACTOR × the available column height.
  */
-export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): string[] {
+export function renderTypeset(
+  bubbles: MangaBubble[],
+  svg: SVGSVGElement,
+): { clippedIds: string[]; fontSizes: Record<string, number> } {
   // Clear previous text
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 
   const clippedIds: string[] = []
+  const fontSizes: Record<string, number> = {}
   const debugLog: object[] = []
 
   // Parse natural dimensions from viewBox
   const vb = svg.getAttribute('viewBox')?.split(' ').map(Number)
-  if (!vb || vb.length < 4) return clippedIds
+  if (!vb || vb.length < 4) return { clippedIds, fontSizes }
   const [, , W, H] = vb
 
   const ns = 'http://www.w3.org/2000/svg'
@@ -624,6 +628,7 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true, override)
     const splitDotsApplied = altFit.fontSize > fontSize || (altFit.fontSize === fontSize && !altFit.truncated && truncated)
     if (splitDotsApplied) ({ fontSize, segColumns, truncated } = altFit)
+    fontSizes[bubble.id] = fontSize
     if (truncated) clippedIds.push(bubble.id)
     const colStride = fontSize + COL_GAP
 
@@ -755,5 +760,5 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(debugLog),
   }).catch(() => {})
-  return clippedIds
+  return { clippedIds, fontSizes }
 }
