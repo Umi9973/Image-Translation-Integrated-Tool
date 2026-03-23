@@ -143,10 +143,9 @@ const FONT_FAMILY        = "'ZCOOL KuaiLe', 'Microsoft YaHei', 'PingFang SC', sa
 const PADDING            = 6    // px inside bubble rect (SVG user units = natural image px)
 const COL_GAP            = 4    // px gap between vertical columns
 const MAX_FONT           = 72
-const DOT_RADIUS         = 2.2  // fixed dot radius (SVG units / canvas px) — same across all bubbles
-const DOT_STRIDE         = 9    // fixed vertical step between dot centres — same across all bubbles
+const DOT_RADIUS_FACTOR  = 0.12  // dot radius = fontSize × this
+const DOT_STRIDE_FACTOR  = 0.50  // vertical step between dot centres = fontSize × this
 const MIN_FONT           = 8
-const DOT_SPLIT_THRESHOLD = 24  // if font < this after layout, retry with word+dot chunks split
 
 // Title/honorific words that must not start a new column.
 // When BudouX splits "名前先生" → ["名前", "先生"], merge them back so the
@@ -256,24 +255,31 @@ function packChunks(
   chunks: string[],
   charsPerCol: number,
   dotThreshold: number,
+  forceDotColumn = false,
 ): { cols: string[]; truncated: boolean } {
   const cols: string[] = []
   let col = ''
   let truncated = false
+
+  const pushDot = (chunk: string) => {
+    if (chunk.length > dotThreshold) { cols.push(chunk.slice(0, dotThreshold)); truncated = true }
+    else cols.push(chunk)
+  }
+
   for (const chunk of chunks) {
+    // forceDotColumn: pure dot runs always get their own column so the font
+    // algorithm can size word columns independently of the dot run length.
+    if (forceDotColumn && isDotRun(chunk)) {
+      if (col) { cols.push(col); col = '' }
+      pushDot(chunk)
+      continue
+    }
     if (col.length + chunk.length <= charsPerCol) {
       col += chunk
     } else {
       if (col) { cols.push(col); col = '' }
       if (chunk.includes('・')) {
-        // Dot-containing chunks stay in one column. Allow up to dotThreshold
-        // chars (slightly beyond bubble height) before silently clipping.
-        if (chunk.length > dotThreshold) {
-          cols.push(chunk.slice(0, dotThreshold))
-          truncated = true
-        } else {
-          cols.push(chunk)
-        }
+        pushDot(chunk)
       } else {
         // Regular chunk longer than a full column — must hard-split it.
         // Never split immediately before a sentence-final particle so that
@@ -306,6 +312,7 @@ function fitVertical(
   segChunks: string[][],
   maxW: number,
   maxH: number,
+  forceDotColumn = false,
 ): { fontSize: number; segColumns: string[][]; truncated: boolean } {
   const innerW = maxW - PADDING * 2
   const innerH = maxH - PADDING * 2
@@ -323,44 +330,41 @@ function fitVertical(
     return (isShortWord || endsWithTitle) ? Math.max(m, c.length) : m
   }, 1)
 
-  // Dot threshold is independent of font size: max dots that fit in the
-  // allowed height (innerH × DOT_OVERFLOW_FACTOR) when each dot takes DOT_STRIDE px.
-  const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / DOT_STRIDE))
-
   // Standard pass: largest font whose columns fit the bubble width.
+  // dotThreshold is computed per-fs since DOT_STRIDE now scales with fontSize.
   let best: { fontSize: number; segColumns: string[][]; truncated: boolean } | null = null
   for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
-    const charsPerCol = Math.max(1, Math.floor(innerH / fs))
+    const charsPerCol  = Math.max(1, Math.floor(innerH / fs))
     if (charsPerCol < maxChunkLen) continue
-    const packed      = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold))
-    const segColumns  = packed.map(p => p.cols)
-    const truncated   = packed.some(p => p.truncated)
-    const numCols     = segColumns.reduce((s, cols) => s + cols.length, 0)
-    const totalW      = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
+    const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / (fs * DOT_STRIDE_FACTOR)))
+    const packed       = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold, forceDotColumn))
+    const segColumns   = packed.map(p => p.cols)
+    const truncated    = packed.some(p => p.truncated)
+    const numCols      = segColumns.reduce((s, cols) => s + cols.length, 0)
+    const totalW       = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
     if (totalW <= innerW) { best = { fontSize: fs, segColumns, truncated }; break }
   }
 
   // Single-column preference for short text.
   // Guards: single segment (no '\' break), total chars ≤ 5, bubble taller than wide,
   // result font ≥ 12px, and maxChunkLen respected.
-  // Without these guards: long text shrinks to unreadable, wide bubbles get a
-  // thin strip, forced '\' breaks get ignored, and indivisible chunks hard-split.
   const totalChars = segChunks.flat().reduce((s, c) => s + (c.includes('・') ? 0 : c.length), 0)
   if (
     best !== null &&
     best.segColumns.reduce((s, cols) => s + cols.length, 0) > 1 &&
-    segChunks.length === 1 &&          // no '\' forced breaks
-    totalChars <= 5 &&                 // genuinely short
-    innerH > innerW                    // taller than wide — column bubble
+    segChunks.length === 1 &&
+    totalChars <= 5 &&
+    innerH > innerW
   ) {
     for (let fs = best.fontSize - 1; fs >= Math.max(MIN_FONT, 12); fs--) {
-      const charsPerCol = Math.max(1, Math.floor(innerH / fs))
+      const charsPerCol  = Math.max(1, Math.floor(innerH / fs))
       if (charsPerCol < maxChunkLen) continue
-      const packed     = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold))
-      const segColumns = packed.map(p => p.cols)
-      const truncated  = packed.some(p => p.truncated)
-      const numCols    = segColumns.reduce((s, cols) => s + cols.length, 0)
-      const totalW     = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
+      const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / (fs * DOT_STRIDE_FACTOR)))
+      const packed       = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold, forceDotColumn))
+      const segColumns   = packed.map(p => p.cols)
+      const truncated    = packed.some(p => p.truncated)
+      const numCols      = segColumns.reduce((s, cols) => s + cols.length, 0)
+      const totalW       = numCols * fs + Math.max(0, numCols - 1) * COL_GAP
       if (totalW <= innerW && numCols === 1) return { fontSize: fs, segColumns, truncated }
     }
   }
@@ -369,7 +373,8 @@ function fitVertical(
 
   // Fallback: minimum font, may overflow — still respect maxChunkLen to avoid hard-splits
   const charsPerCol  = Math.max(maxChunkLen, Math.max(1, Math.floor(innerH / MIN_FONT)))
-  const packed       = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold))
+  const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / (MIN_FONT * DOT_STRIDE_FACTOR)))
+  const packed       = segChunks.map(chunks => packChunks(chunks, charsPerCol, dotThreshold, forceDotColumn))
   return {
     fontSize:   MIN_FONT,
     segColumns: packed.map(p => p.cols),
@@ -382,10 +387,11 @@ function splitSegments(text: string): string[] {
   return text.split('\\').map(s => s.trim()).filter(s => s.length > 0)
 }
 
-/** Rendered pixel height of one column string (dots use DOT_STRIDE, text uses fontSize). */
+/** Rendered pixel height of one column string (dots use DOT_STRIDE_FACTOR × fontSize, text uses fontSize). */
 function columnHeight(col: string, fontSize: number): number {
+  const dotStride = fontSize * DOT_STRIDE_FACTOR
   let h = 0
-  for (const ch of col) h += ch === '・' ? DOT_STRIDE : fontSize
+  for (const ch of col) h += ch === '・' ? dotStride : fontSize
   return h
 }
 
@@ -436,10 +442,8 @@ export function renderTypesetToCanvas(
     const bh = (layoutRect.h / 100) * H
 
     let { fontSize, segColumns } = fitVertical(segChunks, bw, bh)
-    if (fontSize < DOT_SPLIT_THRESHOLD) {
-      const alt = fitVertical(segChunks.map(splitdots), bw, bh)
-      if (alt.fontSize > fontSize) ({ fontSize, segColumns } = alt)
-    }
+    const alt = fitVertical(segChunks.map(splitdots), bw, bh, true)
+    if (alt.fontSize > fontSize) ({ fontSize, segColumns } = alt)
     const colStride = fontSize + COL_GAP
 
     const numCols   = segColumns.reduce((s, cols) => s + cols.length, 0)
@@ -481,6 +485,8 @@ export function renderTypesetToCanvas(
     ctx.textAlign    = 'center'
 
     const strokeWidth = Math.max(1, fontSize * 0.14)
+    const dotRadius   = fontSize * DOT_RADIUS_FACTOR
+    const dotStride   = fontSize * DOT_STRIDE_FACTOR
 
     // Glyphs that are horizontal by nature and need 90° rotation in vertical
     // layout. SVG writing-mode handles this automatically; canvas does not.
@@ -491,29 +497,24 @@ export function renderTypesetToCanvas(
       for (const colText of cols) {
         const x = rightColCenterX - colIdx * colStride
 
-        // Running y: text chars advance by fontSize, dots by DOT_STRIDE.
         let y = topY
         for (const ch of colText) {
           const cx = x
 
           if (ch === '・') {
-            // Draw as a geometric circle centred in the DOT_STRIDE slot.
-            // SVG uses paint-order:stroke so only the outer half of the stroke
-            // (strokeWidth/2) is visible beyond the fill. Match that here.
-            // Also cap at DOT_STRIDE*0.45 so adjacent dots never overlap.
-            const dotCy = y + DOT_STRIDE * 0.5
-            const outerR = Math.min(DOT_STRIDE * 0.45, DOT_RADIUS + strokeWidth * 0.5)
+            const dotCy  = y + dotStride * 0.5
+            const outerR = Math.min(dotStride * 0.45, dotRadius + strokeWidth * 0.5)
             ctx.save()
             ctx.beginPath()
             ctx.arc(cx, dotCy, outerR, 0, Math.PI * 2)
             ctx.fillStyle = 'white'
             ctx.fill()
             ctx.beginPath()
-            ctx.arc(cx, dotCy, DOT_RADIUS, 0, Math.PI * 2)
+            ctx.arc(cx, dotCy, dotRadius, 0, Math.PI * 2)
             ctx.fillStyle = '#1a1a1a'
             ctx.fill()
             ctx.restore()
-            y += DOT_STRIDE
+            y += dotStride
           } else if (ROTATE_CHARS.has(ch)) {
             // Rotate 90° around the centre of the character cell so horizontal
             // dash glyphs become vertical strokes, matching SVG behaviour.
@@ -602,14 +603,9 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
 
     const initialFit = fitVertical(segChunks, bw, bh)
     let { fontSize, segColumns, truncated } = initialFit
-    let splitDotsApplied = false
-    if (fontSize < DOT_SPLIT_THRESHOLD) {
-      const alt = fitVertical(segChunks.map(splitdots), bw, bh)
-      if (alt.fontSize > fontSize) {
-        ;({ fontSize, segColumns, truncated } = alt)
-        splitDotsApplied = true
-      }
-    }
+    const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true)
+    const splitDotsApplied = altFit.fontSize > fontSize
+    if (splitDotsApplied) ({ fontSize, segColumns, truncated } = altFit)
     if (truncated) clippedIds.push(bubble.id)
     const colStride = fontSize + COL_GAP
 
@@ -683,15 +679,14 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     g.setAttribute('stroke-linejoin', 'round')
     g.setAttribute('paint-order',     'stroke')
 
-    const dotR = DOT_RADIUS
+    const dotRadius = fontSize * DOT_RADIUS_FACTOR
+    const dotStride = fontSize * DOT_STRIDE_FACTOR
 
     let colIdx = 0
     for (const cols of segColumns) {
       for (const colText of cols) {
         const x = rightColCenterX - colIdx * colStride
 
-        // Render column with a running y: text chars advance by fontSize,
-        // dot chars advance by DOT_STRIDE (fixed, font-independent spacing).
         let y        = topY
         let textSeg  = ''
         let textSegY = topY
@@ -713,10 +708,10 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
             flushText()
             const circle = document.createElementNS(ns, 'circle')
             circle.setAttribute('cx', String(x))
-            circle.setAttribute('cy', String(y + DOT_STRIDE * 0.5))
-            circle.setAttribute('r',  String(dotR))
+            circle.setAttribute('cy', String(y + dotStride * 0.5))
+            circle.setAttribute('r',  String(dotRadius))
             g.appendChild(circle)
-            y       += DOT_STRIDE
+            y       += dotStride
             textSegY = y
           } else {
             textSeg += ch
@@ -732,6 +727,10 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     svg.appendChild(g)
   }
 
-  console.log('[typeset debug]', JSON.stringify(debugLog, null, 2))
+  fetch('/__debug/typeset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(debugLog),
+  }).catch(() => {})
   return clippedIds
 }
