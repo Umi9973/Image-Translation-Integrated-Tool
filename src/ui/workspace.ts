@@ -730,11 +730,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onTextChange(field, value) {
         bubble[field] = value
         if (field === 'raw_ja') updateListPreview(listEl, id, value)
-        if (field === 'translated_zh' &&
-            (bubble.state === 'detected' || bubble.state === 'ocr_done')) {
-          bubble.state = 'translated'
-          updateListBadge(listEl, id, bubble.state)
-          updateEditorBadge(editorContainer, bubble.state)
+        if (field === 'translated_zh') {
+          updateTypesetBtn()
+          if (bubble.state === 'detected' || bubble.state === 'ocr_done') {
+            bubble.state = 'translated'
+            updateListBadge(listEl, id, bubble.state)
+            updateEditorBadge(editorContainer, bubble.state)
+          }
         }
       },
       onLockToggle() {
