@@ -348,6 +348,22 @@ function splitSegments(text: string): string[] {
   return text.split('\\').map(s => s.trim()).filter(s => s.length > 0)
 }
 
+/** Rendered pixel height of one column string (dots use DOT_STRIDE, text uses fontSize). */
+function columnHeight(col: string, fontSize: number): number {
+  let h = 0
+  for (const ch of col) h += ch === '・' ? DOT_STRIDE : fontSize
+  return h
+}
+
+/** Max rendered height across all columns in all segments. */
+function maxColumnHeight(segColumns: string[][], fontSize: number): number {
+  let max = 0
+  for (const cols of segColumns)
+    for (const col of cols)
+      max = Math.max(max, columnHeight(col, fontSize))
+  return max
+}
+
 // ── Canvas export (font-correct download) ────────────────────────────────────
 
 /**
@@ -393,7 +409,8 @@ export function renderTypesetToCanvas(
     const blockLeft = bx + (bw - totalW) / 2
 
     const rightColCenterX = blockLeft + totalW - fontSize / 2
-    const topY = by + PADDING
+    const textH = maxColumnHeight(segColumns, fontSize)
+    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
 
     if (bubble.cover || bubble.source === 'manual') {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
@@ -554,7 +571,8 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
 
     // Rightmost column x (center of column, columns go right-to-left)
     const rightColCenterX = blockLeft + totalW - fontSize / 2
-    const topY = by + PADDING
+    const textH = maxColumnHeight(segColumns, fontSize)
+    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
 
     if (bubble.cover || bubble.source === 'manual') {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
