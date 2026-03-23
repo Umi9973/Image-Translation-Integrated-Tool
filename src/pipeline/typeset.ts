@@ -566,6 +566,7 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 
   const clippedIds: string[] = []
+  const debugLog: object[] = []
 
   // Parse natural dimensions from viewBox
   const vb = svg.getAttribute('viewBox')?.split(' ').map(Number)
@@ -599,10 +600,15 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
-    let { fontSize, segColumns, truncated } = fitVertical(segChunks, bw, bh)
+    const initialFit = fitVertical(segChunks, bw, bh)
+    let { fontSize, segColumns, truncated } = initialFit
+    let splitDotsApplied = false
     if (fontSize < DOT_SPLIT_THRESHOLD) {
       const alt = fitVertical(segChunks.map(splitdots), bw, bh)
-      if (alt.fontSize > fontSize) ({ fontSize, segColumns, truncated } = alt)
+      if (alt.fontSize > fontSize) {
+        ;({ fontSize, segColumns, truncated } = alt)
+        splitDotsApplied = true
+      }
     }
     if (truncated) clippedIds.push(bubble.id)
     const colStride = fontSize + COL_GAP
@@ -615,6 +621,24 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
     const rightColCenterX = blockLeft + totalW - fontSize / 2
     const textH = maxColumnHeight(segColumns, fontSize)
     const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
+
+    debugLog.push({
+      id:               bubble.id,
+      text:             raw,
+      rectSource:       bubble.bubble_rect ? 'bubble_rect' : 'rect',
+      bubblePx:         { w: Math.round(bw), h: Math.round(bh) },
+      chunksInitial:    segChunks.map(c => c.join(' | ')),
+      initialFontSize:  initialFit.fontSize,
+      splitDotsApplied,
+      chunksAfterSplit: splitDotsApplied ? segChunks.map(c => splitdots(c).join(' | ')) : null,
+      fontSize,
+      numCols,
+      columns:          segColumns.flat(),
+      textHeightPx:     Math.round(textH),
+      verticalOffset:   Math.round(topY - by),
+      centered:         topY > by + PADDING,
+      truncated,
+    })
 
     if (bubble.cover || bubble.source === 'manual') {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
@@ -707,5 +731,7 @@ export function renderTypeset(bubbles: MangaBubble[], svg: SVGSVGElement): strin
 
     svg.appendChild(g)
   }
+
+  console.log('[typeset debug]', JSON.stringify(debugLog, null, 2))
   return clippedIds
 }
