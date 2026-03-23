@@ -518,7 +518,7 @@ async function inpaintBackground(
 // ── Main pass ──────────────────────────────────────────────────────────────────
 
 interface RectPct { x: number; y: number; w: number; h: number }
-interface BubbleMsg { id: string; rect: RectPct }
+interface BubbleMsg { id: string; rect: RectPct; shape?: string }
 interface ExpandedRect { id: string; rect: RectPct }
 
 async function processAll(
@@ -605,10 +605,24 @@ async function processAll(
       const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
       const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
       const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
-      for (let y = py1; y <= py2; y++) {
-        for (let x = px1; x <= px2; x++) {
-          const idx = (y * W + x) * 4
-          outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
+      if (b.shape === 'bubble') {
+        // Elliptical fill — clip corners so the white region matches the oval bubble shape
+        const cx = (px1 + px2) / 2, cy = (py1 + py2) / 2
+        const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
+        for (let y = py1; y <= py2; y++) {
+          for (let x = px1; x <= px2; x++) {
+            const nx = (x - cx) / ra, ny = (y - cy) / rb
+            if (nx * nx + ny * ny > 1) continue
+            const idx = (y * W + x) * 4
+            outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
+          }
+        }
+      } else {
+        for (let y = py1; y <= py2; y++) {
+          for (let x = px1; x <= px2; x++) {
+            const idx = (y * W + x) * 4
+            outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
+          }
         }
       }
       expandedRects.push({

@@ -70,7 +70,7 @@ export function inpaintPage(
     const msg: Record<string, unknown> = {
       type: 'inpaint',
       imageBlob,
-      bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect })),
+      bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect, shape: b.shape })),
     }
     if (textMask) {
       // Copy before transferring — transfer detaches the buffer, which would
