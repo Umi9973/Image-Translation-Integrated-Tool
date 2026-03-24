@@ -89,6 +89,7 @@ interface EditorCallbacks {
   onRevertInpaint?:  () => void
   onRevertTypeset?:  () => void
   onFontSizeOverrideChange: (size: number | undefined) => void
+  onDirectionChange: (dir: 'vertical' | 'horizontal') => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -275,11 +276,23 @@ function renderEditor(
   fontSizeRow.appendChild(fontSizeInput)
   fontSizeRow.appendChild(fontSizeClearBtn)
 
+  // Direction toggle
+  const dirLabel = document.createElement('label')
+  dirLabel.className = 'ws-cover-label'
+  const dirCheck = document.createElement('input')
+  dirCheck.type = 'checkbox'
+  dirCheck.checked = bubble.text_direction === 'horizontal'
+  dirCheck.addEventListener('change', () =>
+    callbacks.onDirectionChange(dirCheck.checked ? 'horizontal' : 'vertical'))
+  dirLabel.appendChild(dirCheck)
+  dirLabel.append(' Horizontal text')
+
   editor.appendChild(jaLabel)
   editor.appendChild(jaTextarea)
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
   editor.appendChild(fontSizeRow)
+  editor.appendChild(dirLabel)
   editor.appendChild(coverSection)
   editor.appendChild(nav)
   editor.appendChild(actions)
@@ -816,6 +829,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
         : undefined,
       onFontSizeOverrideChange(size) { bubble.font_size_override = size },
+      onDirectionChange(dir) { bubble.text_direction = dir },
     }, computedFontSizes[id])
   }
 
@@ -1039,6 +1053,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
               ? () => { typesetSvg.querySelector(`[data-bubble-id="${id}"]`)?.remove(); selectBubble(id) }
               : undefined,
             onFontSizeOverrideChange(size) { bubble.font_size_override = size },
+            onDirectionChange(dir) { bubble.text_direction = dir },
           }, computedFontSizes[id])
         }
       } catch (err) {

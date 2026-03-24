@@ -441,6 +441,64 @@ export function renderTypesetToCanvas(
     const raw = bubble.translated_zh.trim()
     if (!raw) continue
 
+    const layoutRect = bubble.bubble_rect ?? bubble.rect
+    const bx = (layoutRect.x / 100) * W
+    const by = (layoutRect.y / 100) * H
+    const bw = (layoutRect.w / 100) * W
+    const bh = (layoutRect.h / 100) * H
+
+    // ── Horizontal text path ─────────────────────────────────────────────────
+    if (bubble.text_direction === 'horizontal') {
+      const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
+      const innerW = bw - PADDING * 2
+      const innerH = bh - PADDING * 2
+      const override = bubble.font_size_override
+      let fontSize = MIN_FONT
+      if (override !== undefined) {
+        fontSize = Math.max(MIN_FONT, override)
+      } else {
+        for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
+          ctx.font = `${fs}px ${FONT_FAMILY}`
+          const maxLineW = Math.max(...lines.map(l => ctx.measureText(l).width))
+          if (maxLineW <= innerW && lines.length * fs * 1.2 <= innerH) { fontSize = fs; break }
+        }
+      }
+      if (bubble.cover || bubble.source === 'manual') {
+        const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
+        const r = Math.min(rx, ry)
+        const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
+        ctx.save()
+        ctx.beginPath()
+        if (typeof (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect === 'function') {
+          (ctx as CanvasRenderingContext2D & { roundRect: (x: number, y: number, w: number, h: number, r: number) => void }).roundRect(bx, by, bw, bh, r)
+        } else {
+          ctx.rect(bx, by, bw, bh)
+        }
+        ctx.fillStyle = '#ffffff'
+        ctx.fill()
+        if (bubble.coverOutline) { ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = strokeW; ctx.stroke() }
+        ctx.restore()
+      }
+      ctx.save()
+      ctx.beginPath(); ctx.rect(bx, by, bw, bh); ctx.clip()
+      ctx.font = `${fontSize}px ${FONT_FAMILY}`
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      const strokeWidth = Math.max(1, fontSize * 0.14)
+      const lineH  = fontSize * 1.2
+      const totalH = lines.length * lineH
+      const startY = by + (bh - totalH) / 2 + lineH / 2
+      const cx = bx + bw / 2
+      lines.forEach((line, i) => {
+        ctx.strokeStyle = 'white'; ctx.lineWidth = strokeWidth * 2; ctx.lineJoin = 'round'
+        ctx.strokeText(line, cx, startY + i * lineH)
+        ctx.fillStyle = '#1a1a1a'
+        ctx.fillText(line, cx, startY + i * lineH)
+      })
+      ctx.restore()
+      continue
+    }
+
     const segments = splitSegments(raw)
     if (segments.length === 0) continue
 
@@ -448,12 +506,6 @@ export function renderTypesetToCanvas(
       const normalized = normalizeVertical(seg)
       return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
     })
-
-    const layoutRect = bubble.bubble_rect ?? bubble.rect
-    const bx = (layoutRect.x / 100) * W
-    const by = (layoutRect.y / 100) * H
-    const bw = (layoutRect.w / 100) * W
-    const bh = (layoutRect.h / 100) * H
 
     const override = bubble.font_size_override
     let { fontSize, segColumns, truncated: trunc0 } = fitVertical(segChunks, bw, bh, false, override)
@@ -601,6 +653,89 @@ export function renderTypeset(
     const raw = bubble.translated_zh.trim()
     if (!raw) continue
 
+    // Use expanded bubble interior rect if available (set after inpainting),
+    // otherwise fall back to the tight text rect from detection.
+    const layoutRect = bubble.bubble_rect ?? bubble.rect
+
+    // Convert percentage rect to natural-image pixel coords
+    const bx = (layoutRect.x / 100) * W
+    const by = (layoutRect.y / 100) * H
+    const bw = (layoutRect.w / 100) * W
+    const bh = (layoutRect.h / 100) * H
+
+    // ── Horizontal text path ─────────────────────────────────────────────────
+    if (bubble.text_direction === 'horizontal') {
+      const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
+      const innerW = bw - PADDING * 2
+      const innerH = bh - PADDING * 2
+      const override = bubble.font_size_override
+      let fontSize = MIN_FONT
+      if (override !== undefined) {
+        fontSize = Math.max(MIN_FONT, override)
+      } else {
+        for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
+          if ([...lines].every(l => [...l].length * fs * 0.95 <= innerW) && lines.length * fs * 1.2 <= innerH) {
+            fontSize = fs; break
+          }
+        }
+      }
+      fontSizes[bubble.id] = fontSize
+
+      const bubbleGroup = document.createElementNS(ns, 'g')
+      bubbleGroup.setAttribute('data-bubble-id', bubble.id)
+
+      if (bubble.cover || bubble.source === 'manual') {
+        const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
+        const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
+        const bg = document.createElementNS(ns, 'rect')
+        bg.setAttribute('x', String(bx)); bg.setAttribute('y', String(by))
+        bg.setAttribute('width', String(bw)); bg.setAttribute('height', String(bh))
+        bg.setAttribute('rx', String(rx)); bg.setAttribute('ry', String(ry))
+        bg.setAttribute('fill', '#ffffff')
+        if (bubble.coverOutline) { bg.setAttribute('stroke', '#1a1a1a'); bg.setAttribute('stroke-width', String(strokeW)) }
+        else bg.setAttribute('stroke', 'none')
+        bubbleGroup.appendChild(bg)
+      }
+
+      const clipId = `bc-${bubble.id}`
+      const clipPath = document.createElementNS(ns, 'clipPath')
+      clipPath.setAttribute('id', clipId)
+      const clipRect = document.createElementNS(ns, 'rect')
+      clipRect.setAttribute('x', String(bx)); clipRect.setAttribute('y', String(by))
+      clipRect.setAttribute('width', String(bw)); clipRect.setAttribute('height', String(bh))
+      clipPath.appendChild(clipRect)
+      bubbleGroup.appendChild(clipPath)
+
+      const g = document.createElementNS(ns, 'g')
+      g.setAttribute('clip-path', `url(#${clipId})`)
+      g.setAttribute('font-family', FONT_FAMILY)
+      g.setAttribute('font-size', String(fontSize))
+      g.setAttribute('fill', '#1a1a1a')
+      g.setAttribute('stroke', 'white')
+      g.setAttribute('stroke-width', String(Math.max(1, fontSize * 0.14)))
+      g.setAttribute('stroke-linejoin', 'round')
+      g.setAttribute('paint-order', 'stroke')
+      g.setAttribute('text-anchor', 'middle')
+      g.setAttribute('dominant-baseline', 'middle')
+
+      const lineH  = fontSize * 1.2
+      const totalH = lines.length * lineH
+      const startY = by + (bh - totalH) / 2 + lineH / 2
+      const cx = bx + bw / 2
+
+      lines.forEach((line, i) => {
+        const t = document.createElementNS(ns, 'text')
+        t.setAttribute('x', String(cx))
+        t.setAttribute('y', String(startY + i * lineH))
+        t.textContent = line
+        g.appendChild(t)
+      })
+
+      bubbleGroup.appendChild(g)
+      svg.appendChild(bubbleGroup)
+      continue
+    }
+
     // Split on '\' — each segment starts a new column group
     const segments = splitSegments(raw)
     if (segments.length === 0) continue
@@ -611,16 +746,6 @@ export function renderTypeset(
       const normalized = normalizeVertical(seg)
       return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
     })
-
-    // Use expanded bubble interior rect if available (set after inpainting),
-    // otherwise fall back to the tight text rect from detection.
-    const layoutRect = bubble.bubble_rect ?? bubble.rect
-
-    // Convert percentage rect to natural-image pixel coords
-    const bx = (layoutRect.x / 100) * W
-    const by = (layoutRect.y / 100) * H
-    const bw = (layoutRect.w / 100) * W
-    const bh = (layoutRect.h / 100) * H
 
     const override = bubble.font_size_override
     const initialFit = fitVertical(segChunks, bw, bh, false, override)

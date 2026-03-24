@@ -15,6 +15,7 @@ export interface MangaBubble {
   cover?: boolean                 // render background fill behind text in typeset layer
   coverOutline?: boolean          // draw a black border around the cover fill
   font_size_override?: number     // force exact font size in typeset (skips auto-fit); undefined = auto
+  text_direction?: 'vertical' | 'horizontal'  // default 'vertical'; 'horizontal' renders LTR text
 }
 
 export interface MangaPage {
