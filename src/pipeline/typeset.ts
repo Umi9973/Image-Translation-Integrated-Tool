@@ -463,7 +463,7 @@ export function renderTypesetToCanvas(
           if (maxLineW <= innerW && lines.length * fs * 1.2 <= innerH) { fontSize = fs; break }
         }
       }
-      if (bubble.cover || bubble.source === 'manual') {
+      if (bubble.cover) {
         const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
         const r = Math.min(rx, ry)
         const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
@@ -523,7 +523,7 @@ export function renderTypesetToCanvas(
     const textH = maxColumnHeight(segColumns, fontSize)
     const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
 
-    if (bubble.cover || bubble.source === 'manual') {
+    if (bubble.cover) {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
       const r = Math.min(rx, ry)
       const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
@@ -684,7 +684,7 @@ export function renderTypeset(
       const bubbleGroup = document.createElementNS(ns, 'g')
       bubbleGroup.setAttribute('data-bubble-id', bubble.id)
 
-      if (bubble.cover || bubble.source === 'manual') {
+      if (bubble.cover) {
         const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
         const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
         const bg = document.createElementNS(ns, 'rect')
@@ -788,7 +788,7 @@ export function renderTypeset(
     const bubbleGroup = document.createElementNS(ns, 'g')
     bubbleGroup.setAttribute('data-bubble-id', bubble.id)
 
-    if (bubble.cover || bubble.source === 'manual') {
+    if (bubble.cover) {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
       const strokeW = Math.max(2, Math.min(bw, bh) * 0.025)
       const bg = document.createElementNS(ns, 'rect')
