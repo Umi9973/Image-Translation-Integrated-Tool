@@ -90,6 +90,8 @@ interface EditorCallbacks {
   onRevertTypeset?:  () => void
   onFontSizeOverrideChange: (size: number | undefined) => void
   onDirectionChange: (dir: 'vertical' | 'horizontal') => void
+  onResetPosition: () => void
+  onIsBackgroundChange: (val: boolean) => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -287,12 +289,35 @@ function renderEditor(
   dirLabel.appendChild(dirCheck)
   dirLabel.append(' Horizontal text')
 
+  // Background text toggle
+  const bgLabel = document.createElement('label')
+  bgLabel.className = 'ws-cover-label'
+  const bgCheck = document.createElement('input')
+  bgCheck.type = 'checkbox'
+  bgCheck.checked = bubble.is_background === true
+  bgCheck.addEventListener('change', () => callbacks.onIsBackgroundChange(bgCheck.checked))
+  bgLabel.appendChild(bgCheck)
+  bgLabel.append(' Background text')
+
+  const resetPosBtn = document.createElement('button')
+  resetPosBtn.type = 'button'
+  resetPosBtn.className = 'ws-font-size-clear'
+  resetPosBtn.textContent = 'Reset position'
+  resetPosBtn.title = 'Clear text offset — return text to default centered position'
+  resetPosBtn.addEventListener('click', () => {
+    bubble.text_offset_x = 0
+    bubble.text_offset_y = 0
+    callbacks.onResetPosition()
+  })
+
   editor.appendChild(jaLabel)
   editor.appendChild(jaTextarea)
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
   editor.appendChild(fontSizeRow)
   editor.appendChild(dirLabel)
+  editor.appendChild(bgLabel)
+  editor.appendChild(resetPosBtn)
   editor.appendChild(coverSection)
   editor.appendChild(nav)
   editor.appendChild(actions)
@@ -684,6 +709,91 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     if (selectedId) selectBubble(selectedId)
   })
 
+  const moveTextBtn = document.createElement('button')
+  moveTextBtn.type = 'button'
+  moveTextBtn.className = 'ws-move-text-btn'
+  moveTextBtn.textContent = 'Move Text'
+  moveTextBtn.title = 'Click to toggle drag mode — drag text to reposition it within the bubble'
+  controls.appendChild(moveTextBtn)
+
+  let textMoveMode = false
+  moveTextBtn.addEventListener('click', () => {
+    textMoveMode = !textMoveMode
+    moveTextBtn.classList.toggle('is-active', textMoveMode)
+    typesetSvg.style.pointerEvents = textMoveMode ? 'all' : ''
+    svg.style.pointerEvents        = textMoveMode ? 'none' : ''
+    typesetSvg.style.cursor        = textMoveMode ? 'grab' : ''
+  })
+
+  // ── Text drag ─────────────────────────────────────────────────────────────
+  let dragBubbleId:  string | null = null
+  let dragGroupEl:   SVGGElement | null = null
+  let dragStartX = 0
+  let dragStartY = 0
+
+  typesetSvg.addEventListener('mousedown', (e) => {
+    if (!textMoveMode) return
+    let el = e.target as Element | null
+    while (el && el !== typesetSvg) {
+      if (el.getAttribute('data-bubble-id')) break
+      el = el.parentElement
+    }
+    if (!el || el === typesetSvg) return
+    dragBubbleId = el.getAttribute('data-bubble-id')
+    dragGroupEl  = (el as Element).querySelector<SVGGElement>('[data-text-group]')
+    dragStartX   = e.clientX
+    dragStartY   = e.clientY
+    typesetSvg.style.cursor = 'grabbing'
+    e.preventDefault()
+  })
+
+  const onTextDragMove = (e: MouseEvent) => {
+    if (!dragGroupEl) return
+    const svgRect  = typesetSvg.getBoundingClientRect()
+    const vb       = typesetSvg.getAttribute('viewBox')!.split(' ').map(Number)
+    const scaleX   = vb[2] / svgRect.width
+    const scaleY   = vb[3] / svgRect.height
+    const dx = (e.clientX - dragStartX) * scaleX
+    const dy = (e.clientY - dragStartY) * scaleY
+    dragGroupEl.setAttribute('transform', `translate(${dx},${dy})`)
+  }
+
+  const onTextDragEnd = (e: MouseEvent) => {
+    if (!dragBubbleId || !dragGroupEl) return
+    const svgRect  = typesetSvg.getBoundingClientRect()
+    const vb       = typesetSvg.getAttribute('viewBox')!.split(' ').map(Number)
+    const W = vb[2], H = vb[3]
+    const scaleX   = W / svgRect.width
+    const scaleY   = H / svgRect.height
+    const dx = (e.clientX - dragStartX) * scaleX
+    const dy = (e.clientY - dragStartY) * scaleY
+    const bubble = bubbles.find(b => b.id === dragBubbleId)
+    if (bubble) {
+      bubble.text_offset_x = (bubble.text_offset_x ?? 0) + (dx / W) * 100
+      bubble.text_offset_y = (bubble.text_offset_y ?? 0) + (dy / H) * 100
+      dragGroupEl.removeAttribute('transform')
+      const { clippedIds: cids, fontSizes } = renderTypeset(bubbles, typesetSvg)
+      Object.assign(computedFontSizes, fontSizes)
+      listEl.querySelectorAll('.ws-dot-clip-warn').forEach((el: Element) => el.remove())
+      for (const id of cids) {
+        const item = listEl.querySelector<HTMLElement>(`[data-id="${id}"]`)
+        if (!item) continue
+        const warn = document.createElement('span')
+        warn.className = 'ws-dot-clip-warn'
+        warn.title = 'Some dots were clipped'
+        warn.textContent = '⚠ dots clipped'
+        item.appendChild(warn)
+      }
+    }
+    dragBubbleId = null
+    dragGroupEl  = null
+    typesetSvg.style.cursor = 'grab'
+    if (selectedId) selectBubble(selectedId)
+  }
+
+  document.addEventListener('mousemove', onTextDragMove)
+  document.addEventListener('mouseup',   onTextDragEnd)
+
   const previewBtn = document.createElement('button')
   previewBtn.type = 'button'
   previewBtn.className = 'ws-preview-btn'
@@ -830,6 +940,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         : undefined,
       onFontSizeOverrideChange(size) { bubble.font_size_override = size },
       onDirectionChange(dir) { bubble.text_direction = dir },
+      onResetPosition() { selectBubble(id) },
+      onIsBackgroundChange(val) { bubble.is_background = val },
     }, computedFontSizes[id])
   }
 
@@ -1054,7 +1166,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
               : undefined,
             onFontSizeOverrideChange(size) { bubble.font_size_override = size },
             onDirectionChange(dir) { bubble.text_direction = dir },
-          }, computedFontSizes[id])
+            onResetPosition() { selectBubble(id) },
+            onIsBackgroundChange(val) { bubble.is_background = val },
+                }, computedFontSizes[id])
         }
       } catch (err) {
         console.error(`OCR failed for bubble ${id}:`, err)
@@ -1162,9 +1276,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       )
 
       // Write expanded bubble interior rects back into each speech bubble
-      for (const { id, rect } of expandedRects) {
+      const expandedIds = new Set(expandedRects.map(r => r.id))
+      for (const { id, rect, fillColor } of expandedRects) {
         const b = bubbles.find(b => b.id === id)
-        if (b) b.bubble_rect = rect
+        if (b) { b.bubble_rect = rect; if (fillColor) b.inpaint_color = fillColor }
+      }
+      for (const b of bubbles) {
+        if (b.is_background === undefined) b.is_background = !expandedIds.has(b.id)
       }
 
       // resultBlob is a transparent PNG overlay — speech bubble text rects are white,

@@ -26,7 +26,7 @@ function getWorker(): Worker {
 export interface InpaintResult {
   blob: Blob
   /** Expanded bubble interior rects (percentage-based) for speech bubbles only. */
-  expandedRects: { id: string; rect: { x: number; y: number; w: number; h: number } }[]
+  expandedRects: { id: string; rect: { x: number; y: number; w: number; h: number }; fillColor?: string }[]
 }
 
 /**
@@ -70,7 +70,7 @@ export function inpaintPage(
     const msg: Record<string, unknown> = {
       type: 'inpaint',
       imageBlob,
-      bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect, shape: b.shape })),
+      bubbles: bubbles.map(b => ({ id: b.id, rect: b.rect, shape: b.shape, inpaint_color: b.inpaint_color, is_background: b.is_background })),
     }
     if (textMask) {
       // Copy before transferring — transfer detaches the buffer, which would

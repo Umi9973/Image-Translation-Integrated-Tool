@@ -474,21 +474,24 @@ export function renderTypesetToCanvas(
         } else {
           ctx.rect(bx, by, bw, bh)
         }
-        ctx.fillStyle = '#ffffff'
+        ctx.fillStyle = bubble.inpaint_color ?? '#ffffff'
         ctx.fill()
         if (bubble.coverOutline) { ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = strokeW; ctx.stroke() }
         ctx.restore()
       }
+      const offX = ((bubble.text_offset_x ?? 0) / 100) * W
+      const offY = ((bubble.text_offset_y ?? 0) / 100) * H
+      const clipX = Math.min(bx, bx + offX); const clipY = Math.min(by, by + offY)
       ctx.save()
-      ctx.beginPath(); ctx.rect(bx, by, bw, bh); ctx.clip()
+      ctx.beginPath(); ctx.rect(clipX, clipY, bw + Math.abs(offX), bh + Math.abs(offY)); ctx.clip()
       ctx.font = `${fontSize}px ${FONT_FAMILY}`
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
       const strokeWidth = Math.max(1, fontSize * 0.14)
       const lineH  = fontSize * 1.2
       const totalH = lines.length * lineH
-      const startY = by + (bh - totalH) / 2 + lineH / 2
-      const cx = bx + bw / 2
+      const startY = by + (bh - totalH) / 2 + lineH / 2 + offY
+      const cx = bx + bw / 2 + offX
       lines.forEach((line, i) => {
         ctx.strokeStyle = 'white'; ctx.lineWidth = strokeWidth * 2; ctx.lineJoin = 'round'
         ctx.strokeText(line, cx, startY + i * lineH)
@@ -519,9 +522,11 @@ export function renderTypesetToCanvas(
     const totalW    = numCols * fontSize + Math.max(0, numCols - 1) * COL_GAP
     const blockLeft = bx + (bw - totalW) / 2
 
-    const rightColCenterX = blockLeft + totalW - fontSize / 2
+    const offX = ((bubble.text_offset_x ?? 0) / 100) * W
+    const offY = ((bubble.text_offset_y ?? 0) / 100) * H
+    const rightColCenterX = blockLeft + totalW - fontSize / 2 + offX
     const textH = maxColumnHeight(segColumns, fontSize)
-    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
+    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2) + offY
 
     if (bubble.cover) {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
@@ -545,9 +550,10 @@ export function renderTypesetToCanvas(
     }
 
     ctx.save()
-    // Clip canvas to bubble rect so dots/text never bleed outside
+    // Clip to union of bubble rect and offset text area
+    const clipX2 = Math.min(bx, bx + offX); const clipY2 = Math.min(by, by + offY)
     ctx.beginPath()
-    ctx.rect(bx, by, bw, bh)
+    ctx.rect(clipX2, clipY2, bw + Math.abs(offX), bh + Math.abs(offY))
     ctx.clip()
     ctx.font         = `${fontSize}px ${FONT_FAMILY}`
     ctx.textBaseline = 'top'
@@ -691,7 +697,7 @@ export function renderTypeset(
         bg.setAttribute('x', String(bx)); bg.setAttribute('y', String(by))
         bg.setAttribute('width', String(bw)); bg.setAttribute('height', String(bh))
         bg.setAttribute('rx', String(rx)); bg.setAttribute('ry', String(ry))
-        bg.setAttribute('fill', '#ffffff')
+        bg.setAttribute('fill', bubble.inpaint_color ?? '#ffffff')
         if (bubble.coverOutline) { bg.setAttribute('stroke', '#1a1a1a'); bg.setAttribute('stroke-width', String(strokeW)) }
         else bg.setAttribute('stroke', 'none')
         bubbleGroup.appendChild(bg)
@@ -717,11 +723,14 @@ export function renderTypeset(
       g.setAttribute('paint-order', 'stroke')
       g.setAttribute('text-anchor', 'middle')
       g.setAttribute('dominant-baseline', 'middle')
+      g.setAttribute('data-text-group', 'true')
 
+      const svgOffX = ((bubble.text_offset_x ?? 0) / 100) * W
+      const svgOffY = ((bubble.text_offset_y ?? 0) / 100) * H
       const lineH  = fontSize * 1.2
       const totalH = lines.length * lineH
-      const startY = by + (bh - totalH) / 2 + lineH / 2
-      const cx = bx + bw / 2
+      const startY = by + (bh - totalH) / 2 + lineH / 2 + svgOffY
+      const cx = bx + bw / 2 + svgOffX
 
       lines.forEach((line, i) => {
         const t = document.createElementNS(ns, 'text')
@@ -761,10 +770,12 @@ export function renderTypeset(
     const totalW    = numCols * fontSize + Math.max(0, numCols - 1) * COL_GAP
     const blockLeft = bx + (bw - totalW) / 2
 
+    const svgOffX = ((bubble.text_offset_x ?? 0) / 100) * W
+    const svgOffY = ((bubble.text_offset_y ?? 0) / 100) * H
     // Rightmost column x (center of column, columns go right-to-left)
-    const rightColCenterX = blockLeft + totalW - fontSize / 2
+    const rightColCenterX = blockLeft + totalW - fontSize / 2 + svgOffX
     const textH = maxColumnHeight(segColumns, fontSize)
-    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2)
+    const topY  = Math.max(by + PADDING, by + (bh - textH) / 2) + svgOffY
 
     debugLog.push({
       id:               bubble.id,
@@ -808,20 +819,21 @@ export function renderTypeset(
       bubbleGroup.appendChild(bg)
     }
 
-    // Clip group to bubble rect so dots and text never bleed outside
+    // Clip group to union of bubble rect + offset area so moved text isn't clipped
     const clipId = `bc-${bubble.id}`
     const clipPath = document.createElementNS(ns, 'clipPath')
     clipPath.setAttribute('id', clipId)
     const clipRect = document.createElementNS(ns, 'rect')
-    clipRect.setAttribute('x',      String(bx))
-    clipRect.setAttribute('y',      String(by))
-    clipRect.setAttribute('width',  String(bw))
-    clipRect.setAttribute('height', String(bh))
+    clipRect.setAttribute('x',      String(Math.min(bx, bx + svgOffX)))
+    clipRect.setAttribute('y',      String(Math.min(by, by + svgOffY)))
+    clipRect.setAttribute('width',  String(bw + Math.abs(svgOffX)))
+    clipRect.setAttribute('height', String(bh + Math.abs(svgOffY)))
     clipPath.appendChild(clipRect)
     bubbleGroup.appendChild(clipPath)
 
     const g = document.createElementNS(ns, 'g')
     g.setAttribute('clip-path',    `url(#${clipId})`)
+    g.setAttribute('data-text-group', 'true')
     g.setAttribute('font-family',  FONT_FAMILY)
     g.setAttribute('font-size',    String(fontSize))
     // White outline behind black fill — standard manga typesetting look

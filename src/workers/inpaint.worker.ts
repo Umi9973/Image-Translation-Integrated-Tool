@@ -47,8 +47,10 @@ const TEXT_LUM_THRESH  = 160  // pixels brighter than this inside the bounds are
 const BRIGHT_THRESH    = 200  // luminance above this = bright pixel
 const BRIGHT_MIN_RATIO = 0.50 // fraction of interior samples that must be bright to confirm speech bubble
 
-const SOLID_RING   = 12  // px wide sampling ring around text rect for solid-bg detection
-const SOLID_THRESH = 120  // max per-channel stddev — below this = solid/uniform background (120 catches screentone halftone patterns)
+const SOLID_RING       = 12  // px wide sampling ring around text rect for solid-bg detection
+const SOLID_RING_SKIP  = 5   // skip this many px right outside the text rect (white character halos live here)
+const SOLID_THRESH     = 120 // max per-channel stddev — below this = solid/uniform background (120 catches screentone halftone patterns)
+const HALO_WHITE_THRESH = 235 // pixels brighter than this in the sample ring are treated as halo contamination and excluded
 
 // ── Bubble boundary scanner ────────────────────────────────────────────────────
 // Used for speech bubbles only: expands the tight text rect outward until
@@ -220,7 +222,9 @@ function sampleBackgroundFromMask(
       for (let x = bx1; x <= bx2; x += STEP) {
         if (textMask[y * W + x] > 0) continue
         const p = (y * W + x) * 4
-        rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
+        const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2]
+        if (r > HALO_WHITE_THRESH && g > HALO_WHITE_THRESH && b > HALO_WHITE_THRESH) continue
+        rs.push(r); gs.push(g); bs.push(b)
       }
     }
   }
@@ -254,20 +258,28 @@ function sampleBorderColor(
   W: number, H: number,
   tx1: number, ty1: number, tx2: number, ty2: number,
 ): { r: number; g: number; b: number; solid: boolean } {
+  // Outer ring boundary (up to SOLID_RING px from text rect edge)
   const bx1 = Math.max(0, tx1 - SOLID_RING)
   const by1 = Math.max(0, ty1 - SOLID_RING)
   const bx2 = Math.min(W - 1, tx2 + SOLID_RING)
   const by2 = Math.min(H - 1, ty2 + SOLID_RING)
+  // Inner exclusion zone: text rect + SOLID_RING_SKIP px (skips character white halos)
+  const ix1 = tx1 - SOLID_RING_SKIP, iy1 = ty1 - SOLID_RING_SKIP
+  const ix2 = tx2 + SOLID_RING_SKIP, iy2 = ty2 + SOLID_RING_SKIP
   const STEP = 4
   const rs: number[] = [], gs: number[] = [], bs: number[] = []
   for (let y = by1; y <= by2; y += STEP) {
     for (let x = bx1; x <= bx2; x += STEP) {
-      if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue
+      if (x >= ix1 && x <= ix2 && y >= iy1 && y <= iy2) continue  // skip halo zone
       const p = (y * W + x) * 4
-      rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
+      const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2]
+      // Exclude near-white pixels — likely residual halos or bubble interior bleed
+      if (r > HALO_WHITE_THRESH && g > HALO_WHITE_THRESH && b > HALO_WHITE_THRESH) continue
+      rs.push(r); gs.push(g); bs.push(b)
     }
   }
-  if (rs.length === 0) return { r: 0, g: 0, b: 0, solid: false }
+  // If no non-white pixels found, the background is white
+  if (rs.length === 0) return { r: 255, g: 255, b: 255, solid: true }
   const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
   const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
   const mr = mean(rs), mg = mean(gs), mb = mean(bs)
@@ -521,8 +533,8 @@ async function inpaintBackground(
 // ── Main pass ──────────────────────────────────────────────────────────────────
 
 interface RectPct { x: number; y: number; w: number; h: number }
-interface BubbleMsg { id: string; rect: RectPct; shape?: string }
-interface ExpandedRect { id: string; rect: RectPct }
+interface BubbleMsg { id: string; rect: RectPct; shape?: string; inpaint_color?: string; is_background?: boolean }
+interface ExpandedRect { id: string; rect: RectPct; fillColor?: string }
 
 async function processAll(
   imageBlob: Blob,
@@ -556,30 +568,55 @@ async function processAll(
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
     let route: Route
     let dbgExtra: object = {}
+    if (b.inpaint_color) {
+      const hex = b.inpaint_color.replace('#', '')
+      const r = parseInt(hex.slice(0, 2), 16)
+      const g = parseInt(hex.slice(2, 4), 16)
+      const bv = parseInt(hex.slice(4, 6), 16)
+      solidColors.set(i, { r, g, b: bv, dilation: 3 })
+      dbg.push({ id: b.id, rect_pct: b.rect, route: 'solid', colorOverride: b.inpaint_color })
+      return 'solid'
+    }
+    if (b.is_background === true) {
+      // User-forced background route: sample color and fill solid, skip auto-detect
+      const color = textMask
+        ? sampleBackgroundFromMask(origPixels, W, H, tx1, ty1, tx2, ty2, textMask)
+        : sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
+      const dilation = textMask ? (color as ReturnType<typeof sampleBackgroundFromMask>).dilation : 3
+      solidColors.set(i, { r: color.r, g: color.g, b: color.b, dilation })
+      dbg.push({ id: b.id, rect_pct: b.rect, route: 'solid', forced: true })
+      return 'solid'
+    }
+    if (b.is_background === false) {
+      // User-forced bubble route: skip auto-detect, go straight to white/bubble fill
+      dbg.push({ id: b.id, rect_pct: b.rect, route: 'white', forced: true })
+      return 'white'
+    }
     if (textMask) {
       const bg = sampleBackgroundFromMask(origPixels, W, H, tx1, ty1, tx2, ty2, textMask)
       dbgExtra = { maskUsed: true, bgLum: +bg.lum.toFixed(1), bgSolid: bg.solid, bgRgb: [bg.r, bg.g, bg.b] }
-      if (bg.lum > 220) {
+      if (bg.r > 240 && bg.g > 240 && bg.b > 240) {
+        // Truly white speech bubble — use white route (scans full bubble bounds)
         route = 'white'
-      } else if (bg.solid || !LAMA_ENABLED) {
+      } else if (bg.lum > 180 || bg.solid || !LAMA_ENABLED) {
+        // Bright or solid-color background — fill with the actual sampled color
         solidColors.set(i, { r: bg.r, g: bg.g, b: bg.b, dilation: bg.dilation })
         route = 'solid'
       } else {
         route = 'lama'
       }
     } else {
+      const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
       const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
-      dbgExtra = { maskUsed: false, bright }
-      if (bright) {
+      dbgExtra = { maskUsed: false, bright, borderRgb: [border.r, border.g, border.b] }
+      if (bright && border.r > 240 && border.g > 240 && border.b > 240) {
+        // Truly white — use white route for full bubble coverage
         route = 'white'
+      } else if (bright || border.solid || !LAMA_ENABLED) {
+        solidColors.set(i, { ...border, dilation: 3 })
+        route = 'solid'
       } else {
-        const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
-        if (border.solid || !LAMA_ENABLED) {
-          solidColors.set(i, { ...border, dilation: 3 })
-          route = 'solid'
-        } else {
-          route = 'lama'
-        }
+        route = 'lama'
       }
     }
     dbg.push({ id: b.id, rect_pct: b.rect, route, ...dbgExtra })
@@ -599,17 +636,31 @@ async function processAll(
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
 
     if (routes[i] === 'white') {
-      // ── Speech bubble → paint white ──
+      // ── Speech bubble → sample interior color, then fill ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
       const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
+      // Sample the bubble margins (inside bubble bounds but outside text rect) to detect fill color.
+      // Skip dark pixels (text strokes). Whatever remains is the bubble interior color.
+      const rs: number[] = [], gs: number[] = [], bs: number[] = []
+      for (let y = by; y <= by2; y += 3) {
+        for (let x = bx; x <= bx2; x += 3) {
+          if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue  // skip text rect
+          const p = (y * W + x) * 4
+          const lum = origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
+          if (lum < 80) continue  // skip dark pixels (text strokes, bubble border)
+          rs.push(origPixels[p]); gs.push(origPixels[p + 1]); bs.push(origPixels[p + 2])
+        }
+      }
+      const mean = (a: number[]) => a.length > 0 ? Math.round(a.reduce((s, v) => s + v, 0) / a.length) : 255
+      const fr = mean(rs), fg = mean(gs), fb = mean(bs)
       // Expand each side by WHITE_EXPAND only if there's enough room before the border.
       const px1 = (tx1 - bx)  >= WHITE_EXPAND + MIN_MARGIN ? tx1 - WHITE_EXPAND : tx1
       const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
       const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
       const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
       if (b.shape === 'bubble') {
-        // Elliptical fill — clip corners so the white region matches the oval bubble shape
+        // Elliptical fill — clip corners so the region matches the oval bubble shape
         const cx = (px1 + px2) / 2, cy = (py1 + py2) / 2
         const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
         for (let y = py1; y <= py2; y++) {
@@ -617,14 +668,14 @@ async function processAll(
             const nx = (x - cx) / ra, ny = (y - cy) / rb
             if (nx * nx + ny * ny > 1) continue
             const idx = (y * W + x) * 4
-            outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
+            outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
         }
       } else {
         for (let y = py1; y <= py2; y++) {
           for (let x = px1; x <= px2; x++) {
             const idx = (y * W + x) * 4
-            outData[idx] = 255; outData[idx + 1] = 255; outData[idx + 2] = 255; outData[idx + 3] = 255
+            outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
         }
       }
@@ -636,6 +687,7 @@ async function processAll(
           w: ((bx2 - bx) / W) * 100,
           h: ((by2 - by) / H) * 100,
         },
+        fillColor: `#${fr.toString(16).padStart(2, '0')}${fg.toString(16).padStart(2, '0')}${fb.toString(16).padStart(2, '0')}`,
       })
     } else if (routes[i] === 'solid') {
       // ── Solid background → fill with sampled color ──

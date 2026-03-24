@@ -16,6 +16,10 @@ export interface MangaBubble {
   coverOutline?: boolean          // draw a black border around the cover fill
   font_size_override?: number     // force exact font size in typeset (skips auto-fit); undefined = auto
   text_direction?: 'vertical' | 'horizontal'  // default 'vertical'; 'horizontal' renders LTR text
+  text_offset_x?: number  // horizontal text position shift (% of image width, + = right)
+  text_offset_y?: number  // vertical text position shift (% of image height, + = down)
+  inpaint_color?: string  // hex color override for inpaint fill (e.g. '#f0e8d0'); undefined = auto-detect
+  is_background?: boolean // inpaint route override: true = force solid fill, false = force bubble fill, undefined = auto
 }
 
 export interface MangaPage {

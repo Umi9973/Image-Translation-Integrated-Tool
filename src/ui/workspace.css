@@ -251,6 +251,21 @@
 }
 .ws-revert-all-typeset-btn:hover { background: rgba(124, 92, 252, 0.15); }
 
+.ws-move-text-btn {
+  padding: 7px 16px;
+  background: transparent;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.ws-move-text-btn:hover { background: rgba(124, 92, 252, 0.15); }
+.ws-move-text-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .ws-revert-all-btn {
   padding: 7px 16px;
   background: transparent;
