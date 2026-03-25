@@ -97,8 +97,8 @@ function scanBubbleBounds(
   const topExp   = scanEdge(y1, -1, H, x1, x2, false)
   const botExp   = scanEdge(y2,  1, H, x1, x2, false)
   return [
-    Math.max(0, x1 - leftExp),  Math.max(0, y1 - topExp),
-    Math.min(W, x2 + rightExp), Math.min(H, y2 + botExp),
+    Math.max(0, x1 - leftExp),      Math.max(0, y1 - topExp),
+    Math.min(W - 1, x2 + rightExp), Math.min(H - 1, y2 + botExp),
   ]
 }
 
@@ -659,10 +659,10 @@ async function processAll(
       const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
       const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
       const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
-      if (b.shape === 'bubble') {
+      const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
+      if (b.shape === 'bubble' && ra > 0 && rb > 0) {
         // Elliptical fill — clip corners so the region matches the oval bubble shape
         const cx = (px1 + px2) / 2, cy = (py1 + py2) / 2
-        const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
         for (let y = py1; y <= py2; y++) {
           for (let x = px1; x <= px2; x++) {
             const nx = (x - cx) / ra, ny = (y - cy) / rb
@@ -673,7 +673,7 @@ async function processAll(
         }
       } else {
         for (let y = py1; y <= py2; y++) {
-          for (let x = px1; x <= px2; x++) {
+          for (let x = Math.max(0, px1); x <= Math.min(W - 1, px2); x++) {
             const idx = (y * W + x) * 4
             outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
@@ -694,6 +694,13 @@ async function processAll(
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
       const { r, g, b, dilation: HALO_DILATION } = solidColors.get(i)!
+      const fillRect = (x1: number, y1: number, x2: number, y2: number) => {
+        for (let y = y1; y <= y2; y++)
+          for (let x = x1; x <= x2; x++) {
+            const idx = (y * W + x) * 4
+            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+          }
+      }
       if (textMask) {
         // Dilate the heatmap mask by HALO_DILATION px (adaptive: 3 or 6 based on detected halo thickness).
         // Fill boundary also extends by HALO_DILATION so halos outside the tight text box are covered.
@@ -701,33 +708,29 @@ async function processAll(
         const fy1 = Math.max(0, ty1 - BG_PADDING - HALO_DILATION)
         const fx2 = Math.min(W - 1, tx2 + BG_PADDING + HALO_DILATION)
         const fy2 = Math.min(H - 1, ty2 + BG_PADDING + HALO_DILATION)
+        let wrote = false
         for (let y = fy1; y <= fy2; y++) {
           for (let x = fx1; x <= fx2; x++) {
-            // Check if any pixel within HALO_DILATION radius is a text pixel
             let hit = false
-            for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !hit; dy++) {
+            for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !hit; dy++)
               for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !hit; dx++) {
                 const ny = y + dy, nx = x + dx
                 if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) hit = true
               }
-            }
             if (!hit) continue
             const idx = (y * W + x) * 4
             outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+            wrote = true
           }
         }
+        // Fallback: mask had no hot pixels for this bubble (low-confidence small text) → fill rect directly
+        if (!wrote) fillRect(fx1, fy1, fx2, fy2)
       } else {
-        // Fallback (no heatmap): fill full padded bounding box
-        const fx1 = Math.max(0, tx1 - BG_PADDING)
-        const fy1 = Math.max(0, ty1 - BG_PADDING)
-        const fx2 = Math.min(W, tx2 + BG_PADDING)
-        const fy2 = Math.min(H, ty2 + BG_PADDING)
-        for (let y = fy1; y <= fy2; y++) {
-          for (let x = fx1; x <= fx2; x++) {
-            const idx = (y * W + x) * 4
-            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
-          }
-        }
+        // No heatmap: fill full padded bounding box
+        fillRect(
+          Math.max(0, tx1 - BG_PADDING), Math.max(0, ty1 - BG_PADDING),
+          Math.min(W - 1, tx2 + BG_PADDING), Math.min(H - 1, ty2 + BG_PADDING),
+        )
       }
     } else {
       // ── Background text → LaMa ──
