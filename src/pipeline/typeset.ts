@@ -314,6 +314,7 @@ function fitVertical(
   maxH: number,
   forceDotColumn = false,
   forcedFontSize?: number,
+  hintFontSize?: number,
 ): { fontSize: number; segColumns: string[][]; truncated: boolean } {
   const innerW = maxW - PADDING * 2
   const innerH = maxH - PADDING * 2
@@ -347,7 +348,7 @@ function fitVertical(
   // Standard pass: largest font whose columns fit the bubble width.
   // dotThreshold is computed per-fs since DOT_STRIDE now scales with fontSize.
   let best: { fontSize: number; segColumns: string[][]; truncated: boolean } | null = null
-  for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
+  for (let fs = Math.min(MAX_FONT, hintFontSize ?? MAX_FONT); fs >= MIN_FONT; fs--) {
     const charsPerCol  = Math.max(1, Math.floor(innerH / fs))
     if (charsPerCol < maxChunkLen) continue
     const dotThreshold = Math.max(1, Math.ceil(innerH * DOT_OVERFLOW_FACTOR / (fs * DOT_STRIDE_FACTOR)))
@@ -447,6 +448,14 @@ export function renderTypesetToCanvas(
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
+    // OCR-based font size hint: estimate from detection box area and CJK char count.
+    // Only used when OCR was run (raw_ja has > 2 chars) and no manual override.
+    const _cjkCount = (bubble.raw_ja.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length
+    const _ocrArea  = (bubble.rect.w / 100) * W * (bubble.rect.h / 100) * H
+    const hintFontSize = (bubble.raw_ja.trim().length > 2 && _cjkCount > 0 && bubble.font_size_override === undefined)
+      ? Math.max(MIN_FONT, Math.min(MAX_FONT, Math.round(Math.sqrt(_ocrArea * 0.75 / _cjkCount))))
+      : undefined
+
     // Apply rotation transform around bubble center for the entire bubble
     if (bubble.rotation) {
       ctx.save()
@@ -466,7 +475,7 @@ export function renderTypesetToCanvas(
       if (override !== undefined) {
         fontSize = Math.max(MIN_FONT, override)
       } else {
-        for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
+        for (let fs = Math.min(MAX_FONT, hintFontSize ?? MAX_FONT); fs >= MIN_FONT; fs--) {
           ctx.font = `${fs}px ${FONT_FAMILY}`
           const maxLineW = Math.max(...lines.map(l => ctx.measureText(l).width))
           if (maxLineW <= innerW && lines.length * fs * 1.2 <= innerH) { fontSize = fs; break }
@@ -521,8 +530,8 @@ export function renderTypesetToCanvas(
     })
 
     const override = bubble.font_size_override
-    let { fontSize, segColumns, truncated: trunc0 } = fitVertical(segChunks, bw, bh, false, override)
-    const alt = fitVertical(segChunks.map(splitdots), bw, bh, true, override)
+    let { fontSize, segColumns, truncated: trunc0 } = fitVertical(segChunks, bw, bh, false, override, hintFontSize)
+    const alt = fitVertical(segChunks.map(splitdots), bw, bh, true, override, hintFontSize)
     if (alt.fontSize > fontSize || (alt.fontSize === fontSize && !alt.truncated && trunc0)) {
       ;({ fontSize, segColumns } = alt)
     }
@@ -680,6 +689,14 @@ export function renderTypeset(
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
+    // OCR-based font size hint: estimate from detection box area and CJK char count.
+    // Only used when OCR was run (raw_ja has > 2 chars) and no manual override.
+    const _cjkCount = (bubble.raw_ja.match(/[\u4e00-\u9fff\u3040-\u30ff]/g) ?? []).length
+    const _ocrArea  = (bubble.rect.w / 100) * W * (bubble.rect.h / 100) * H
+    const hintFontSize = (bubble.raw_ja.trim().length > 2 && _cjkCount > 0 && bubble.font_size_override === undefined)
+      ? Math.max(MIN_FONT, Math.min(MAX_FONT, Math.round(Math.sqrt(_ocrArea * 0.75 / _cjkCount))))
+      : undefined
+
     // ── Horizontal text path ─────────────────────────────────────────────────
     if (bubble.text_direction === 'horizontal') {
       const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
@@ -690,7 +707,7 @@ export function renderTypeset(
       if (override !== undefined) {
         fontSize = Math.max(MIN_FONT, override)
       } else {
-        for (let fs = MAX_FONT; fs >= MIN_FONT; fs--) {
+        for (let fs = Math.min(MAX_FONT, hintFontSize ?? MAX_FONT); fs >= MIN_FONT; fs--) {
           if ([...lines].every(l => [...l].length * fs * 0.95 <= innerW) && lines.length * fs * 1.2 <= innerH) {
             fontSize = fs; break
           }
@@ -774,9 +791,9 @@ export function renderTypeset(
     })
 
     const override = bubble.font_size_override
-    const initialFit = fitVertical(segChunks, bw, bh, false, override)
+    const initialFit = fitVertical(segChunks, bw, bh, false, override, hintFontSize)
     let { fontSize, segColumns, truncated } = initialFit
-    const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true, override)
+    const altFit = fitVertical(segChunks.map(splitdots), bw, bh, true, override, hintFontSize)
     const splitDotsApplied = altFit.fontSize > fontSize || (altFit.fontSize === fontSize && !altFit.truncated && truncated)
     if (splitDotsApplied) ({ fontSize, segColumns, truncated } = altFit)
     fontSizes[bubble.id] = fontSize
