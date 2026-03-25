@@ -533,7 +533,7 @@ async function inpaintBackground(
 // ── Main pass ──────────────────────────────────────────────────────────────────
 
 interface RectPct { x: number; y: number; w: number; h: number }
-interface BubbleMsg { id: string; rect: RectPct; shape?: string; inpaint_color?: string; is_background?: boolean }
+interface BubbleMsg { id: string; rect: RectPct; shape?: string; inpaint_color?: string; is_background?: boolean; rotation?: number }
 interface ExpandedRect { id: string; rect: RectPct; fillColor?: string }
 
 async function processAll(
@@ -660,20 +660,36 @@ async function processAll(
       const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
       const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
       const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
+      const fcx = (px1 + px2) / 2, fcy = (py1 + py2) / 2
+      const ang = b.rotation ? -b.rotation * Math.PI / 180 : 0
+      const cosA = Math.cos(ang), sinA = Math.sin(ang)
+      // Expand bounding box to cover rotated region
+      const hx = ra * Math.abs(cosA) + rb * Math.abs(sinA)
+      const hy = ra * Math.abs(sinA) + rb * Math.abs(cosA)
+      const sx1 = Math.max(0,     Math.floor(fcx - hx))
+      const sy1 = Math.max(0,     Math.floor(fcy - hy))
+      const sx2 = Math.min(W - 1, Math.ceil(fcx  + hx))
+      const sy2 = Math.min(H - 1, Math.ceil(fcy  + hy))
       if (b.shape === 'bubble' && ra > 0 && rb > 0) {
-        // Elliptical fill — clip corners so the region matches the oval bubble shape
-        const cx = (px1 + px2) / 2, cy = (py1 + py2) / 2
-        for (let y = py1; y <= py2; y++) {
-          for (let x = px1; x <= px2; x++) {
-            const nx = (x - cx) / ra, ny = (y - cy) / rb
-            if (nx * nx + ny * ny > 1) continue
+        for (let y = sy1; y <= sy2; y++) {
+          for (let x = sx1; x <= sx2; x++) {
+            // Rotate point back to unrotated space, test ellipse
+            const dx = x - fcx, dy = y - fcy
+            const rx2 = (dx * cosA - dy * sinA) / ra
+            const ry2 = (dx * sinA + dy * cosA) / rb
+            if (rx2 * rx2 + ry2 * ry2 > 1) continue
             const idx = (y * W + x) * 4
             outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
         }
       } else {
-        for (let y = py1; y <= py2; y++) {
-          for (let x = Math.max(0, px1); x <= Math.min(W - 1, px2); x++) {
+        for (let y = sy1; y <= sy2; y++) {
+          for (let x = sx1; x <= sx2; x++) {
+            // Rotate point back to unrotated space, test rect
+            const dx = x - fcx, dy = y - fcy
+            const lx = dx * cosA - dy * sinA
+            const ly = dx * sinA + dy * cosA
+            if (Math.abs(lx) > ra || Math.abs(ly) > rb) continue
             const idx = (y * W + x) * 4
             outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
@@ -693,12 +709,12 @@ async function processAll(
       // ── Solid background → fill with sampled color ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
-      const { r, g, b, dilation: HALO_DILATION } = solidColors.get(i)!
+      const { r, g, b: bl, dilation: HALO_DILATION } = solidColors.get(i)!
       const fillRect = (x1: number, y1: number, x2: number, y2: number) => {
         for (let y = y1; y <= y2; y++)
           for (let x = x1; x <= x2; x++) {
             const idx = (y * W + x) * 4
-            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
           }
       }
       if (textMask) {
@@ -719,18 +735,36 @@ async function processAll(
               }
             if (!hit) continue
             const idx = (y * W + x) * 4
-            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = b; outData[idx + 3] = 255
+            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
             wrote = true
           }
         }
         // Fallback: mask had no hot pixels for this bubble (low-confidence small text) → fill rect directly
         if (!wrote) fillRect(fx1, fy1, fx2, fy2)
       } else {
-        // No heatmap: fill full padded bounding box
-        fillRect(
-          Math.max(0, tx1 - BG_PADDING), Math.max(0, ty1 - BG_PADDING),
-          Math.min(W - 1, tx2 + BG_PADDING), Math.min(H - 1, ty2 + BG_PADDING),
-        )
+        // No heatmap: fill padded bounding box, rotated if needed
+        const sx1 = Math.max(0, tx1 - BG_PADDING), sy1 = Math.max(0, ty1 - BG_PADDING)
+        const sx2 = Math.min(W - 1, tx2 + BG_PADDING), sy2 = Math.min(H - 1, ty2 + BG_PADDING)
+        if (b.rotation) {
+          const ang2 = -b.rotation * Math.PI / 180
+          const cos2 = Math.cos(ang2), sin2 = Math.sin(ang2)
+          const rcx = (sx1 + sx2) / 2, rcy = (sy1 + sy2) / 2
+          const rw = (sx2 - sx1) / 2, rh = (sy2 - sy1) / 2
+          const ehx = rw * Math.abs(cos2) + rh * Math.abs(sin2)
+          const ehy = rw * Math.abs(sin2) + rh * Math.abs(cos2)
+          for (let y = Math.max(0, Math.floor(rcy - ehy)); y <= Math.min(H - 1, Math.ceil(rcy + ehy)); y++) {
+            for (let x = Math.max(0, Math.floor(rcx - ehx)); x <= Math.min(W - 1, Math.ceil(rcx + ehx)); x++) {
+              const dx = x - rcx, dy = y - rcy
+              const lx = dx * cos2 - dy * sin2
+              const ly = dx * sin2 + dy * cos2
+              if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+              const idx = (y * W + x) * 4
+              outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
+            }
+          }
+        } else {
+          fillRect(sx1, sy1, sx2, sy2)
+        }
       }
     } else {
       // ── Background text → LaMa ──

@@ -20,6 +20,7 @@ export interface MangaBubble {
   text_offset_y?: number  // vertical text position shift (% of image height, + = down)
   inpaint_color?: string  // hex color override for inpaint fill (e.g. '#f0e8d0'); undefined = auto-detect
   is_background?: boolean // inpaint route override: true = force solid fill, false = force bubble fill, undefined = auto
+  rotation?: number       // degrees clockwise; applied to both inpaint fill and typeset text
 }
 
 export interface MangaPage {

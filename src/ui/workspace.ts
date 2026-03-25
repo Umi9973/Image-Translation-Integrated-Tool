@@ -92,6 +92,7 @@ interface EditorCallbacks {
   onDirectionChange: (dir: 'vertical' | 'horizontal') => void
   onResetPosition: () => void
   onIsBackgroundChange: (val: boolean) => void
+  onRotationChange: (deg: number | undefined) => void
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -299,6 +300,46 @@ function renderEditor(
   bgLabel.appendChild(bgCheck)
   bgLabel.append(' Background text')
 
+  // Rotation row
+  const rotationRow = document.createElement('div')
+  rotationRow.className = 'ws-font-size-row'
+
+  const rotationLabel = document.createElement('span')
+  rotationLabel.className = 'ws-editor-label'
+  rotationLabel.textContent = 'Rotation°'
+
+  const rotationInput = document.createElement('input')
+  rotationInput.type = 'number'
+  rotationInput.className = 'ws-font-size-input'
+  rotationInput.min = '-45'
+  rotationInput.max = '45'
+  if (bubble.rotation !== undefined) rotationInput.value = String(bubble.rotation)
+  rotationInput.addEventListener('change', () => {
+    const v = parseInt(rotationInput.value, 10)
+    if (isNaN(v) || rotationInput.value.trim() === '') {
+      rotationInput.value = ''
+      callbacks.onRotationChange(undefined)
+    } else {
+      const clamped = Math.max(-45, Math.min(45, v))
+      rotationInput.value = String(clamped)
+      callbacks.onRotationChange(clamped)
+    }
+  })
+
+  const rotationClearBtn = document.createElement('button')
+  rotationClearBtn.type = 'button'
+  rotationClearBtn.className = 'ws-font-size-clear'
+  rotationClearBtn.textContent = '×'
+  rotationClearBtn.title = 'Remove rotation'
+  rotationClearBtn.addEventListener('click', () => {
+    rotationInput.value = ''
+    callbacks.onRotationChange(undefined)
+  })
+
+  rotationRow.appendChild(rotationLabel)
+  rotationRow.appendChild(rotationInput)
+  rotationRow.appendChild(rotationClearBtn)
+
   const resetPosBtn = document.createElement('button')
   resetPosBtn.type = 'button'
   resetPosBtn.className = 'ws-font-size-clear'
@@ -315,6 +356,7 @@ function renderEditor(
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
   editor.appendChild(fontSizeRow)
+  editor.appendChild(rotationRow)
   editor.appendChild(dirLabel)
   editor.appendChild(bgLabel)
   editor.appendChild(resetPosBtn)
@@ -383,10 +425,26 @@ function overlayRxRy(rect: { w: number; h: number }, shape: 'rect' | 'bubble' | 
   return 0
 }
 
+/** SVG matrix transform that rotates visually by `deg` degrees around (cx, cy) in percentage space,
+ *  compensating for the image aspect ratio so the result looks like a true rectangle on screen. */
+function overlayRotateTransform(deg: number, cx: number, cy: number, imgW: number, imgH: number): string {
+  const θ = deg * Math.PI / 180
+  const cos = Math.cos(θ), sin = Math.sin(θ)
+  const sx = imgW / 100, sy = imgH / 100   // px per SVG unit
+  // Matrix: S^-1 × R × S, where S = diag(sx, sy)
+  const a = cos,               c = -sin * sy / sx
+  const b = sin * sx / sy,     d = cos
+  const e = cx * (1 - a) - c * cy
+  const f = cy * (1 - d) - b * cx
+  return `matrix(${a},${b},${c},${d},${e},${f})`
+}
+
 function rebuildSvgOverlay(
   bubbles: MangaBubble[],
   svg: SVGSVGElement,
   mousedownFn: (id: string, e: MouseEvent) => void,
+  imgW: number,
+  imgH: number,
 ): void {
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 
@@ -400,6 +458,11 @@ function rebuildSvgOverlay(
     rect.setAttribute('rx', String(r))
     rect.setAttribute('ry', String(r))
     rect.setAttribute('vector-effect', 'non-scaling-stroke')
+    if (bubble.rotation) {
+      const cx = bubble.rect.x + bubble.rect.w / 2
+      const cy = bubble.rect.y + bubble.rect.h / 2
+      rect.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, imgW, imgH))
+    }
     rect.classList.add('ws-bubble-rect')
     rect.dataset.id = bubble.id
     rect.addEventListener('mousedown', (e) => { e.preventDefault(); mousedownFn(bubble.id, e) })
@@ -533,6 +596,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     const r = overlayRxRy(bubble.rect, bubble.shape)
     el.setAttribute('rx', String(r))
     el.setAttribute('ry', String(r))
+    if (bubble.rotation) {
+      const cx = bubble.rect.x + bubble.rect.w / 2
+      const cy = bubble.rect.y + bubble.rect.h / 2
+      el.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, img.naturalWidth, img.naturalHeight))
+    } else {
+      el.removeAttribute('transform')
+    }
   }
 
   function renderHandles(bubble: MangaBubble): void {
@@ -570,6 +640,10 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       })
       g.appendChild(el)
     }
+    if (bubble.rotation) {
+      const cx = x + w / 2, cy = y + h / 2
+      g.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, img.naturalWidth, img.naturalHeight))
+    }
     svg.appendChild(g)
   }
 
@@ -591,15 +665,24 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       x = Math.max(0, Math.min(100 - sr.w, sr.x + dx))
       y = Math.max(0, Math.min(100 - sr.h, sr.y + dy))
     } else {
+      // For rotated bubbles, project drag onto the box's local axes
+      let ldx = dx, ldy = dy
+      if (bubble.rotation) {
+        const θ = bubble.rotation * Math.PI / 180
+        const cos = Math.cos(θ), sin = Math.sin(θ)
+        const W = img.naturalWidth, H = img.naturalHeight
+        ldx = dx * cos + dy * sin * (H / W)
+        ldy = -dx * sin * (W / H) + dy * cos
+      }
       switch (dragState.handle) {
-        case 'nw': x = sr.x + dx; y = sr.y + dy; w = sr.w - dx; h = sr.h - dy; break
-        case 'n':                  y = sr.y + dy;                h = sr.h - dy; break
-        case 'ne':                 y = sr.y + dy; w = sr.w + dx; h = sr.h - dy; break
-        case 'e':                                 w = sr.w + dx;                break
-        case 'se':                                w = sr.w + dx; h = sr.h + dy; break
-        case 's':                                               h = sr.h + dy; break
-        case 'sw': x = sr.x + dx;                w = sr.w - dx; h = sr.h + dy; break
-        case 'w':  x = sr.x + dx;                w = sr.w - dx;                break
+        case 'nw': x = sr.x + ldx; y = sr.y + ldy; w = sr.w - ldx; h = sr.h - ldy; break
+        case 'n':                   y = sr.y + ldy;                  h = sr.h - ldy; break
+        case 'ne':                  y = sr.y + ldy; w = sr.w + ldx;  h = sr.h - ldy; break
+        case 'e':                                   w = sr.w + ldx;                  break
+        case 'se':                                  w = sr.w + ldx;  h = sr.h + ldy; break
+        case 's':                                                     h = sr.h + ldy; break
+        case 'sw': x = sr.x + ldx;                 w = sr.w - ldx;  h = sr.h + ldy; break
+        case 'w':  x = sr.x + ldx;                 w = sr.w - ldx;                  break
       }
       w = Math.max(2, w)
       h = Math.max(2, h)
@@ -942,6 +1025,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onDirectionChange(dir) { bubble.text_direction = dir },
       onResetPosition() { selectBubble(id) },
       onIsBackgroundChange(val) { bubble.is_background = val },
+      onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
     }, computedFontSizes[id])
   }
 
@@ -1080,7 +1164,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
           startPct: clientToSvgPct(e),
           startRect: { ...bubbles.find(b => b.id === id)!.rect },
         }
-      })
+      }, img.naturalWidth, img.naturalHeight)
       rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
 
       // Enable OCR and Inpaint once we have bubbles
@@ -1168,6 +1252,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
             onDirectionChange(dir) { bubble.text_direction = dir },
             onResetPosition() { selectBubble(id) },
             onIsBackgroundChange(val) { bubble.is_background = val },
+      onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
                 }, computedFontSizes[id])
         }
       } catch (err) {

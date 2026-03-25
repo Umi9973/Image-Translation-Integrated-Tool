@@ -447,6 +447,15 @@ export function renderTypesetToCanvas(
     const bw = (layoutRect.w / 100) * W
     const bh = (layoutRect.h / 100) * H
 
+    // Apply rotation transform around bubble center for the entire bubble
+    if (bubble.rotation) {
+      ctx.save()
+      const rcx = bx + bw / 2, rcy = by + bh / 2
+      ctx.translate(rcx, rcy)
+      ctx.rotate(bubble.rotation * Math.PI / 180)
+      ctx.translate(-rcx, -rcy)
+    }
+
     // ── Horizontal text path ─────────────────────────────────────────────────
     if (bubble.text_direction === 'horizontal') {
       const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
@@ -499,6 +508,7 @@ export function renderTypesetToCanvas(
         ctx.fillText(line, cx, startY + i * lineH)
       })
       ctx.restore()
+      if (bubble.rotation) ctx.restore()  // close rotation transform
       continue
     }
 
@@ -620,6 +630,7 @@ export function renderTypesetToCanvas(
     }
 
     ctx.restore()
+    if (bubble.rotation) ctx.restore()  // close rotation transform
   }
 }
 
@@ -703,17 +714,19 @@ export function renderTypeset(
         bubbleGroup.appendChild(bg)
       }
 
-      const clipId = `bc-${bubble.id}`
-      const clipPath = document.createElementNS(ns, 'clipPath')
-      clipPath.setAttribute('id', clipId)
-      const clipRect = document.createElementNS(ns, 'rect')
-      clipRect.setAttribute('x', String(bx)); clipRect.setAttribute('y', String(by))
-      clipRect.setAttribute('width', String(bw)); clipRect.setAttribute('height', String(bh))
-      clipPath.appendChild(clipRect)
-      bubbleGroup.appendChild(clipPath)
-
       const g = document.createElementNS(ns, 'g')
-      g.setAttribute('clip-path', `url(#${clipId})`)
+      // Skip clip when rotated — clip coords are in parent space and would incorrectly cut rotated text
+      if (!bubble.rotation) {
+        const clipId = `bc-${bubble.id}`
+        const clipPath = document.createElementNS(ns, 'clipPath')
+        clipPath.setAttribute('id', clipId)
+        const clipRect = document.createElementNS(ns, 'rect')
+        clipRect.setAttribute('x', String(bx)); clipRect.setAttribute('y', String(by))
+        clipRect.setAttribute('width', String(bw)); clipRect.setAttribute('height', String(bh))
+        clipPath.appendChild(clipRect)
+        bubbleGroup.appendChild(clipPath)
+        g.setAttribute('clip-path', `url(#${clipId})`)
+      }
       g.setAttribute('font-family', FONT_FAMILY)
       g.setAttribute('font-size', String(fontSize))
       g.setAttribute('fill', '#1a1a1a')
@@ -741,6 +754,10 @@ export function renderTypeset(
       })
 
       bubbleGroup.appendChild(g)
+      if (bubble.rotation) {
+        const rcx = bx + bw / 2, rcy = by + bh / 2
+        bubbleGroup.setAttribute('transform', `rotate(${bubble.rotation}, ${rcx}, ${rcy})`)
+      }
       svg.appendChild(bubbleGroup)
       continue
     }
@@ -819,20 +836,21 @@ export function renderTypeset(
       bubbleGroup.appendChild(bg)
     }
 
-    // Clip group to union of bubble rect + offset area so moved text isn't clipped
-    const clipId = `bc-${bubble.id}`
-    const clipPath = document.createElementNS(ns, 'clipPath')
-    clipPath.setAttribute('id', clipId)
-    const clipRect = document.createElementNS(ns, 'rect')
-    clipRect.setAttribute('x',      String(Math.min(bx, bx + svgOffX)))
-    clipRect.setAttribute('y',      String(Math.min(by, by + svgOffY)))
-    clipRect.setAttribute('width',  String(bw + Math.abs(svgOffX)))
-    clipRect.setAttribute('height', String(bh + Math.abs(svgOffY)))
-    clipPath.appendChild(clipRect)
-    bubbleGroup.appendChild(clipPath)
-
     const g = document.createElementNS(ns, 'g')
-    g.setAttribute('clip-path',    `url(#${clipId})`)
+    // Skip clip when rotated — clip coords are in parent space and would incorrectly cut rotated text
+    if (!bubble.rotation) {
+      const clipId = `bc-${bubble.id}`
+      const clipPath = document.createElementNS(ns, 'clipPath')
+      clipPath.setAttribute('id', clipId)
+      const clipRect = document.createElementNS(ns, 'rect')
+      clipRect.setAttribute('x',      String(Math.min(bx, bx + svgOffX)))
+      clipRect.setAttribute('y',      String(Math.min(by, by + svgOffY)))
+      clipRect.setAttribute('width',  String(bw + Math.abs(svgOffX)))
+      clipRect.setAttribute('height', String(bh + Math.abs(svgOffY)))
+      clipPath.appendChild(clipRect)
+      bubbleGroup.appendChild(clipPath)
+      g.setAttribute('clip-path', `url(#${clipId})`)
+    }
     g.setAttribute('data-text-group', 'true')
     g.setAttribute('font-family',  FONT_FAMILY)
     g.setAttribute('font-size',    String(fontSize))
@@ -889,6 +907,10 @@ export function renderTypeset(
     }
 
     bubbleGroup.appendChild(g)
+    if (bubble.rotation) {
+      const rcx = bx + bw / 2, rcy = by + bh / 2
+      bubbleGroup.setAttribute('transform', `rotate(${bubble.rotation}, ${rcx}, ${rcy})`)
+    }
     svg.appendChild(bubbleGroup)
   }
 
