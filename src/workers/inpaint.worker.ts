@@ -222,9 +222,7 @@ function sampleBackgroundFromMask(
       for (let x = bx1; x <= bx2; x += STEP) {
         if (textMask[y * W + x] > 0) continue
         const p = (y * W + x) * 4
-        const r = pixels[p], g = pixels[p + 1], b = pixels[p + 2]
-        if (r > HALO_WHITE_THRESH && g > HALO_WHITE_THRESH && b > HALO_WHITE_THRESH) continue
-        rs.push(r); gs.push(g); bs.push(b)
+        rs.push(pixels[p]); gs.push(pixels[p + 1]); bs.push(pixels[p + 2])
       }
     }
   }
@@ -640,20 +638,9 @@ async function processAll(
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
       const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
-      // Sample the bubble margins (inside bubble bounds but outside text rect) to detect fill color.
-      // Skip dark pixels (text strokes). Whatever remains is the bubble interior color.
-      const rs: number[] = [], gs: number[] = [], bs: number[] = []
-      for (let y = by; y <= by2; y += 3) {
-        for (let x = bx; x <= bx2; x += 3) {
-          if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue  // skip text rect
-          const p = (y * W + x) * 4
-          const lum = origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
-          if (lum < 80) continue  // skip dark pixels (text strokes, bubble border)
-          rs.push(origPixels[p]); gs.push(origPixels[p + 1]); bs.push(origPixels[p + 2])
-        }
-      }
-      const mean = (a: number[]) => a.length > 0 ? Math.round(a.reduce((s, v) => s + v, 0) / a.length) : 255
-      const fr = mean(rs), fg = mean(gs), fb = mean(bs)
+      // White route is for white speech bubbles — fill with pure white.
+      // Sampling and averaging introduces faint grey from anti-aliased border pixels.
+      const fr = 255, fg = 255, fb = 255
       // Expand each side by WHITE_EXPAND only if there's enough room before the border.
       const px1 = (tx1 - bx)  >= WHITE_EXPAND + MIN_MARGIN ? tx1 - WHITE_EXPAND : tx1
       const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
@@ -670,29 +657,18 @@ async function processAll(
       const sy1 = Math.max(0,     Math.floor(fcy - hy))
       const sx2 = Math.min(W - 1, Math.ceil(fcx  + hx))
       const sy2 = Math.min(H - 1, Math.ceil(fcy  + hy))
-      if (b.shape === 'bubble' && ra > 0 && rb > 0) {
-        for (let y = sy1; y <= sy2; y++) {
-          for (let x = sx1; x <= sx2; x++) {
-            // Rotate point back to unrotated space, test ellipse
-            const dx = x - fcx, dy = y - fcy
-            const rx2 = (dx * cosA - dy * sinA) / ra
-            const ry2 = (dx * sinA + dy * cosA) / rb
-            if (rx2 * rx2 + ry2 * ry2 > 1) continue
-            const idx = (y * W + x) * 4
-            outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
-          }
-        }
-      } else {
-        for (let y = sy1; y <= sy2; y++) {
-          for (let x = sx1; x <= sx2; x++) {
-            // Rotate point back to unrotated space, test rect
+      // Always fill a rectangle — erasing text, not matching the bubble visual outline.
+      // Ellipse would miss corner pixels where text characters can sit.
+      for (let y = sy1; y <= sy2; y++) {
+        for (let x = sx1; x <= sx2; x++) {
+          if (ang !== 0) {
             const dx = x - fcx, dy = y - fcy
             const lx = dx * cosA - dy * sinA
             const ly = dx * sinA + dy * cosA
             if (Math.abs(lx) > ra || Math.abs(ly) > rb) continue
-            const idx = (y * W + x) * 4
-            outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
           }
+          const idx = (y * W + x) * 4
+          outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
         }
       }
       expandedRects.push({

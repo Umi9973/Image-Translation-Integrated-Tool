@@ -1154,6 +1154,21 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       sortedIds = sortBubbleIds(bubbles)
       selectedId = null
 
+      // Write sorted debug JSON — entries ordered by panel number so bubble_no matches the UI.
+      fetch('/__debug/detect_sorted', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sortedIds.map((id, i) => {
+          const b = bubbles.find(b => b.id === id)!
+          return {
+            bubble_no:        i + 1,
+            conf:             b.det_conf,
+            mask_density:     b.det_mask_density,
+            rect_pct:         b.rect,
+          }
+        })),
+      }).catch(() => {})
+
       countEl.textContent = String(bubbles.length)
       statusEl.textContent = `${bubbles.length} text regions found`
 

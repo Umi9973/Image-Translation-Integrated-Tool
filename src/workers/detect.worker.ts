@@ -533,6 +533,24 @@ function processBlk(
       boxDbg.outcome = 'single'
     }
 
+    // Compute textMask density: fraction of pixels inside the model-scale box that are text.
+    let maskDensity = 0
+    if (maskData) {
+      const mx1 = Math.max(0, Math.round(x1)), my1 = Math.max(0, Math.round(y1))
+      const mx2 = Math.min(maskW - 1, Math.round(x2)), my2 = Math.min(maskW - 1, Math.round(y2))
+      let total = 0, textPx = 0
+      for (let row = my1; row <= my2; row++)
+        for (let col = mx1; col <= mx2; col++) {
+          total++
+          if (maskData[row * maskW + col] > MASK_TEXT_THRESH) textPx++
+        }
+      maskDensity = total > 0 ? textPx / total : 0
+    }
+
+    // Filter: if the heatmap has no text pixels in this box, it's a false positive.
+    if (maskData && maskDensity === 0) return []
+
+    boxDbg.mask_density = +maskDensity.toFixed(3)
     boxDbg.final_pct = tightRects.map(([rx1, ry1, rx2, ry2]) => ({
       x: +((rx1/origW)*100).toFixed(2), y: +((ry1/origH)*100).toFixed(2),
       w: +(((rx2-rx1)/origW)*100).toFixed(2), h: +(((ry2-ry1)/origH)*100).toFixed(2),
@@ -542,18 +560,20 @@ function processBlk(
     return tightRects.flatMap(([rx1, ry1, rx2, ry2]) => {
       if (rx2 <= rx1 || ry2 <= ry1) return []
       return [{
-        id:           crypto.randomUUID(),
+        id:               crypto.randomUUID(),
         rect: {
           x: (rx1 / origW) * 100,
           y: (ry1 / origH) * 100,
           w: ((rx2 - rx1) / origW) * 100,
           h: ((ry2 - ry1) / origH) * 100,
         },
-        raw_ja:        '',
-        translated_zh: '',
-        state:         'detected' as const,
-        is_locked:     false,
-        layer_z:       0,
+        raw_ja:           '',
+        translated_zh:    '',
+        state:            'detected' as const,
+        is_locked:        false,
+        layer_z:          0,
+        det_conf:         +scores[idx].toFixed(3),
+        det_mask_density: +maskDensity.toFixed(3),
       }]
     })
   }).concat((() => { self.postMessage({ type: 'debug', data: { beforeNMS: boxes.length, afterNMS: kept.length, boxes: dbg } }); return [] })())
