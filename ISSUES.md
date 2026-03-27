@@ -270,3 +270,64 @@ The fill-ratio check (`SEAM_FILL_FRAC`) was replaced by the perpendicular-axis o
 - **Pass 1 (wrapper)**: drop large box if 2+ smaller boxes are each ≥70% contained within it — catches spurious YOLO wrapper boxes around individually-detected bubbles. Runs first so smaller boxes are still alive.
 - **Pass 2 (containment)**: drop small bubble if ≥85% of its area is inside a single larger one.
 - **Pass 3 (coverage)**: drop bubble whose area is ≥85% covered by others combined — removes redundant full-box when split halves are also detected independently.
+
+---
+
+## Issue #6b — Inpaint fill was faint grey instead of white inside white bubbles
+
+**Status:** Fixed
+**Date:** 2026-03-26
+**Affected file:** `src/workers/inpaint.worker.ts`
+
+### Symptom
+After inpainting a white speech bubble, the erased area appeared as a faint grey rectangle or grey text-shaped shadow rather than clean white. The grey was not from leftover text pixels but from the fill color itself being wrong.
+
+### Root cause (three compounding problems)
+
+**Problem A — Hardcoded grey fallback.**
+`sampleBackgroundFromMask` samples a narrow band of non-text pixels near text strokes to estimate background color. If fewer than 4 samples are collected, it returns a hardcoded `{ r: 128, g: 128, b: 128 }`. For white bubbles, the fallback ring (which expands outward from the text rect) filtered out near-white pixels via `HALO_WHITE_THRESH`, leaving zero samples → hardcoded grey → solid route with grey fill.
+
+**Problem B — HALO_WHITE_THRESH in fallback ring.**
+The fallback ring intentionally filtered near-white pixels to avoid white halos contaminating background color estimates for non-white regions. But this filter also removed the actual bubble interior white pixels, guaranteeing zero samples for white bubbles and triggering the hardcoded grey fallback.
+
+**Problem C — Ellipse fill missed text corners.**
+In the white route, the fill used an ellipse inscribed in the padded text rect. Japanese text characters near the corners of the bounding box fall outside the inscribed ellipse, leaving those pixels unfilled. Since the inpaint canvas is a transparent overlay, unfilled pixels show the original grey text through.
+
+### Fix
+1. **Remove `HALO_WHITE_THRESH` filter from fallback ring** — fallback now samples all non-text pixels including white, so white bubbles correctly return near-white and route to the white path.
+2. **Hardcode white route fill to `(255, 255, 255)`** — the white route is only reached after confirming the bubble is white; sampling and averaging introduces faint grey from anti-aliased border pixels. Pure white is always correct here.
+3. **Replace ellipse fill with rectangle fill** — text erasure should cover the full padded text rect regardless of bubble visual shape; corners must be covered.
+
+### General lesson
+When a function has a hardcoded fallback value, **make sure the fallback is detectable as a failure** (e.g. return null/undefined) rather than a plausible-looking value like 128. A grey fill that looks "almost right" is harder to debug than a clearly wrong value.
+
+---
+
+## Issue #7 — False positive detections (leaves, patterns, non-text regions)
+
+**Status:** Fixed
+**Date:** 2026-03-26
+**Affected file:** `src/workers/detect.worker.ts`
+
+### Symptom
+After detection, bubbles appeared over image regions that clearly contained no text — leaves, background patterns, decorative artwork. These had to be manually deleted before inpainting.
+
+### Root cause
+The detection pipeline filtered by YOLO confidence (`CONF_THRESH = 0.45`) and NMS IoU overlap, but never validated whether the detection heatmap (textMask) actually contained text pixels inside each box. The YOLO model sometimes fired on visually interesting regions that resembled text structure, even though the segmentation heatmap — a separate model output trained specifically to identify text strokes — showed nothing inside the box.
+
+### Fix
+After NMS, compute **textMask density** for each kept box: the fraction of pixels inside the model-scale box where `maskData > MASK_TEXT_THRESH (0.3)`. Discard any box where density is below a minimum threshold.
+
+```typescript
+const MIN_MASK_DENSITY = 0.05  // boxes with < 5% text pixels in the heatmap are false positives
+if (maskData && maskDensity < MIN_MASK_DENSITY) return []
+```
+
+The threshold was calibrated from real detection data. All confirmed false positives had density ≈ 0 (0.000–0.003). All confirmed real text bubbles had density ≥ 0.1.
+
+### Debug tooling added
+- `det_conf` and `det_mask_density` are now stamped on each returned `MangaBubble`.
+- After each detection run, `detect_sorted-debug.json` is written to the project root with entries ordered by bubble panel number, so specific bubbles can be looked up by their UI number.
+
+### General lesson
+When a pipeline has two independent models (object detector + segmentation mask), **use both signals for filtering** — neither alone is sufficient. The YOLO confidence catches low-signal regions; the mask density catches cases where YOLO was confident but the pixel-level evidence disagrees.

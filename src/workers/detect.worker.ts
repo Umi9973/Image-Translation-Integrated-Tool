@@ -547,8 +547,8 @@ function processBlk(
       maskDensity = total > 0 ? textPx / total : 0
     }
 
-    // Filter: if the heatmap has no text pixels in this box, it's a false positive.
-    if (maskData && maskDensity === 0) return []
+    // Filter: if the heatmap has too few text pixels in this box, it's a false positive.
+    if (maskData && maskDensity < 0.05) return []
 
     boxDbg.mask_density = +maskDensity.toFixed(3)
     boxDbg.final_pct = tightRects.map(([rx1, ry1, rx2, ry2]) => ({
