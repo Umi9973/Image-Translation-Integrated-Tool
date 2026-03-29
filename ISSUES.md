@@ -331,3 +331,103 @@ The threshold was calibrated from real detection data. All confirmed false posit
 
 ### General lesson
 When a pipeline has two independent models (object detector + segmentation mask), **use both signals for filtering** — neither alone is sufficient. The YOLO confidence catches low-signal regions; the mask density catches cases where YOLO was confident but the pixel-level evidence disagrees.
+
+---
+
+## Issue #8 — Inpaint fill was rectangular for oval speech bubbles; re-inpaint after revert reverted to rectangle
+
+**Status:** Fixed
+**Date:** 2026-03-28
+**Affected file:** `src/workers/inpaint.worker.ts`, `src/ui/workspace.ts`
+
+### Symptom
+White speech bubbles showed a rectangular white fill patch after inpainting — the fill extended into the corners outside the oval bubble border. Additionally, if the user hit "Revert All Inpaint" and ran inpaint again on a bubble-shaped box, the fill was a rectangle again even though the first run had been oval.
+
+### Root cause (two problems)
+
+**Problem A — White route always used rectangle fill.**
+The white route filled the padded text rect with a solid rectangle regardless of the bubble's `shape` field. Oval speech bubbles have corners that extend outside the bubble border, so the rectangular fill left visible white patches outside the oval edge.
+
+**Problem B — Re-inpaint after revert forced the solid (rect) route.**
+After the first inpaint, the worker returned the fill color to `workspace.ts`, which stored it as `b.inpaint_color = '#ffffff'`. On the second run, the routing logic checked `b.inpaint_color` first and short-circuited to the solid route (which uses a rectangle), bypassing the shape-aware white route entirely. The root cause was treating white as a "custom color override" rather than the default bubble fill.
+
+### Fix
+1. **Shape-aware white fill** — white route now uses an ellipse inscribed in the padded text rect when `b.shape === 'bubble'`, plain rectangle otherwise.
+2. **Don't cache white as inpaint_color** — `workspace.ts` now skips storing `inpaint_color` when the returned fill is `#ffffff`:
+   ```typescript
+   if (fillColor && fillColor !== '#ffffff') b.inpaint_color = fillColor
+   ```
+
+### General lesson
+Treat default/automatic values differently from user-set overrides. Caching the default value (white) as an explicit override made the system forget which route was appropriate on the next run.
+
+---
+
+## Issue #9 — Typeset button stayed disabled after manual box + inpaint + translation
+
+**Status:** Fixed
+**Date:** 2026-03-28
+**Affected file:** `src/ui/workspace.ts`
+
+### Symptom
+When a user manually drew a detection box, inpainted it, then typed a translation into the editor, the Typeset button remained greyed out. The badge also did not advance to `translated` state.
+
+### Root cause
+There were two separate `onTextChange` handler paths in `workspace.ts`:
+1. The `selectBubble` path — correctly called `updateTypesetBtn()` after updating `translated_zh`.
+2. The OCR completion path (used after OCR finishes and the editor is already open) — updated `translated_zh` and the state badge but was missing the `updateTypesetBtn()` call.
+
+Manually added boxes go through a flow closer to the OCR completion path (no prior `selectBubble` call that registers the first handler), so they always hit the broken second path.
+
+### Fix
+Added `updateTypesetBtn()` to the OCR completion `onTextChange` handler:
+```typescript
+if (field === 'translated_zh') {
+  updateTypesetBtn()
+  if (bubble.state === 'detected' || bubble.state === 'ocr_done') { … }
+}
+```
+
+---
+
+## Issue #10 — Background text inpaint fill improvements
+
+**Status:** Fixed
+**Date:** 2026-03-28
+**Affected file:** `src/workers/inpaint.worker.ts`
+
+### Problem A — Fill did not rotate with the box
+
+#### Symptom
+When a background text box had a `rotation` set, the solid fill remained axis-aligned while the box visually showed at an angle, leaving original pixels visible in the rotated corners.
+
+#### Fix
+The `is_background === true` fill path now applies the same rotated-AABB approach used elsewhere: compute the axis-aligned bounding box of the rotated rect, iterate over it, and skip pixels that fall outside the rotated rect via the local-frame test:
+```typescript
+const lx = dx * cosA - dy * sinA, ly = dx * sinA + dy * cosA
+if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+```
+
+### Problem B — Fill color was the mean of ring pixels (wrong on halftone/patterned backgrounds)
+
+#### Symptom
+On screentone or patterned backgrounds (e.g. alternating black/white dots), the mean of all ring pixels produced a mid-grey fill rather than the dominant background tone.
+
+#### Fix
+Changed from arithmetic mean to **mode**: ring pixels are quantized to the nearest 8-step bucket (`r >> 3`, `g >> 3`, `b >> 3`), then the most frequent bucket wins. The final fill color is the mean of the raw pixels in that winning bucket, giving a precise color from the dominant tone:
+```typescript
+const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bv >> 3)
+// … accumulate counts and sums per key …
+// pick bucket with highest count, average its raw pixels
+```
+
+---
+
+## Feature — Text color selector per bubble
+
+**Date:** 2026-03-28
+**Affected files:** `src/types/index.ts`, `src/ui/workspace.ts`, `src/ui/workspace.css`, `src/pipeline/typeset.ts`
+
+Added a per-bubble text color option (`black` or `white`) to the editor panel. Default is black (`#1a1a1a` fill, white outline). Selecting white inverts to `#ffffff` fill, `#1a1a1a` outline — useful for dark-background bubbles or background text on black panels.
+
+The field `text_color?: 'black' | 'white'` was added to `MangaBubble`. All four canvas/SVG rendering paths in `typeset.ts` (horizontal text, vertical regular chars, vertical rotated dashes, SVG) read `bubble.text_color` to derive fill and stroke colors.

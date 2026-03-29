@@ -92,6 +92,7 @@ interface EditorCallbacks {
   onDirectionChange: (dir: 'vertical' | 'horizontal') => void
   onResetPosition: () => void
   onIsBackgroundChange: (val: boolean) => void
+  onTextColorChange: (color: 'black' | 'white') => void
   onRotationChange: (deg: number | undefined) => void
 }
 
@@ -300,6 +301,34 @@ function renderEditor(
   bgLabel.appendChild(bgCheck)
   bgLabel.append(' Background text')
 
+  // Text color selector
+  const textColorRow = document.createElement('div')
+  textColorRow.className = 'ws-font-size-row'
+  const textColorLabel = document.createElement('span')
+  textColorLabel.className = 'ws-editor-label'
+  textColorLabel.textContent = 'Text color'
+  const textColorBlack = document.createElement('button')
+  textColorBlack.type = 'button'
+  textColorBlack.textContent = '● Black'
+  textColorBlack.className = 'ws-text-color-btn' + ((!bubble.text_color || bubble.text_color === 'black') ? ' ws-text-color-active' : '')
+  const textColorWhite = document.createElement('button')
+  textColorWhite.type = 'button'
+  textColorWhite.textContent = '○ White'
+  textColorWhite.className = 'ws-text-color-btn' + (bubble.text_color === 'white' ? ' ws-text-color-active' : '')
+  textColorBlack.addEventListener('click', () => {
+    callbacks.onTextColorChange('black')
+    textColorBlack.classList.add('ws-text-color-active')
+    textColorWhite.classList.remove('ws-text-color-active')
+  })
+  textColorWhite.addEventListener('click', () => {
+    callbacks.onTextColorChange('white')
+    textColorWhite.classList.add('ws-text-color-active')
+    textColorBlack.classList.remove('ws-text-color-active')
+  })
+  textColorRow.appendChild(textColorLabel)
+  textColorRow.appendChild(textColorBlack)
+  textColorRow.appendChild(textColorWhite)
+
   // Rotation row
   const rotationRow = document.createElement('div')
   rotationRow.className = 'ws-font-size-row'
@@ -359,6 +388,7 @@ function renderEditor(
   editor.appendChild(rotationRow)
   editor.appendChild(dirLabel)
   editor.appendChild(bgLabel)
+  editor.appendChild(textColorRow)
   editor.appendChild(resetPosBtn)
   editor.appendChild(coverSection)
   editor.appendChild(nav)
@@ -1025,6 +1055,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onDirectionChange(dir) { bubble.text_direction = dir },
       onResetPosition() { selectBubble(id) },
       onIsBackgroundChange(val) { bubble.is_background = val },
+      onTextColorChange(color) { bubble.text_color = color },
       onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
     }, computedFontSizes[id])
   }
@@ -1226,11 +1257,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
             onTextChange(field, value) {
               bubble[field] = value
               if (field === 'raw_ja') updateListPreview(listEl, id, value)
-              if (field === 'translated_zh' &&
-                  (bubble.state === 'detected' || bubble.state === 'ocr_done')) {
-                bubble.state = 'translated'
-                updateListBadge(listEl, id, bubble.state)
-                updateEditorBadge(editorContainer, bubble.state)
+              if (field === 'translated_zh') {
+                updateTypesetBtn()
+                if (bubble.state === 'detected' || bubble.state === 'ocr_done') {
+                  bubble.state = 'translated'
+                  updateListBadge(listEl, id, bubble.state)
+                  updateEditorBadge(editorContainer, bubble.state)
+                }
               }
             },
             onLockToggle() {
@@ -1267,6 +1300,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
             onDirectionChange(dir) { bubble.text_direction = dir },
             onResetPosition() { selectBubble(id) },
             onIsBackgroundChange(val) { bubble.is_background = val },
+            onTextColorChange(color) { bubble.text_color = color },
       onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
                 }, computedFontSizes[id])
         }
@@ -1379,7 +1413,9 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       const expandedIds = new Set(expandedRects.map(r => r.id))
       for (const { id, rect, fillColor } of expandedRects) {
         const b = bubbles.find(b => b.id === id)
-        if (b) { b.bubble_rect = rect; if (fillColor) b.inpaint_color = fillColor }
+        // Don't cache white — white bubbles should always re-route through the white path,
+        // not be forced to the solid route via inpaint_color on subsequent runs.
+        if (b) { b.bubble_rect = rect; if (fillColor && fillColor !== '#ffffff') b.inpaint_color = fillColor }
       }
       for (const b of bubbles) {
         if (b.is_background === undefined) b.is_background = !expandedIds.has(b.id)

@@ -592,6 +592,18 @@
 
 .ws-font-size-clear:hover { color: var(--text); }
 
+.ws-text-color-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 7px;
+}
+.ws-text-color-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.ws-text-color-btn.ws-text-color-active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
+
 /* ── Cover section (editor panel) ────────────────────────────────────── */
 
 .ws-cover-section {

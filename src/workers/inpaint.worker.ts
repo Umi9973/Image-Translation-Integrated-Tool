@@ -59,8 +59,7 @@ const HALO_WHITE_THRESH = 235 // pixels brighter than this in the sample ring ar
 const DARK_THRESH  = 80
 const MAX_EXPAND   = 200
 const SCAN_SAMPLES = 9
-const WHITE_EXPAND = 7   // px to expand tight text rect when painting white
-const MIN_MARGIN   = 4   // only expand a side if bubble border is at least this far away
+const WHITE_EXPAND = 4   // px to expand tight text rect when painting white (clamped to bubble bounds)
 
 function scanBubbleBounds(
   pixels: Uint8ClampedArray,
@@ -639,15 +638,12 @@ async function processAll(
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
       const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
       // White route is for white speech bubbles — fill with pure white.
-      // Sampling and averaging introduces faint grey from anti-aliased border pixels.
       const fr = 255, fg = 255, fb = 255
-      // Expand each side by WHITE_EXPAND only if there's enough room before the border.
-      const px1 = (tx1 - bx)  >= WHITE_EXPAND + MIN_MARGIN ? tx1 - WHITE_EXPAND : tx1
-      const py1 = (ty1 - by)  >= WHITE_EXPAND + MIN_MARGIN ? ty1 - WHITE_EXPAND : ty1
-      const px2 = (bx2 - tx2) >= WHITE_EXPAND + MIN_MARGIN ? tx2 + WHITE_EXPAND : tx2
-      const py2 = (by2 - ty2) >= WHITE_EXPAND + MIN_MARGIN ? ty2 + WHITE_EXPAND : ty2
-      const ra = (px2 - px1) / 2, rb = (py2 - py1) / 2
-      const fcx = (px1 + px2) / 2, fcy = (py1 + py2) / 2
+      // Expand by WHITE_EXPAND px on each side to cover text pixels near the box edge.
+      const ex1 = Math.max(bx, tx1 - WHITE_EXPAND), ey1 = Math.max(by, ty1 - WHITE_EXPAND)
+      const ex2 = Math.min(bx2, tx2 + WHITE_EXPAND), ey2 = Math.min(by2, ty2 + WHITE_EXPAND)
+      const ra = (ex2 - ex1) / 2, rb = (ey2 - ey1) / 2
+      const fcx = (ex1 + ex2) / 2, fcy = (ey1 + ey2) / 2
       const ang = b.rotation ? -b.rotation * Math.PI / 180 : 0
       const cosA = Math.cos(ang), sinA = Math.sin(ang)
       // Expand bounding box to cover rotated region
@@ -657,14 +653,15 @@ async function processAll(
       const sy1 = Math.max(0,     Math.floor(fcy - hy))
       const sx2 = Math.min(W - 1, Math.ceil(fcx  + hx))
       const sy2 = Math.min(H - 1, Math.ceil(fcy  + hy))
-      // Always fill a rectangle — erasing text, not matching the bubble visual outline.
-      // Ellipse would miss corner pixels where text characters can sit.
       for (let y = sy1; y <= sy2; y++) {
         for (let x = sx1; x <= sx2; x++) {
-          if (ang !== 0) {
-            const dx = x - fcx, dy = y - fcy
-            const lx = dx * cosA - dy * sinA
-            const ly = dx * sinA + dy * cosA
+          const dx = x - fcx, dy = y - fcy
+          const lx = dx * cosA - dy * sinA
+          const ly = dx * sinA + dy * cosA
+          // Use ellipse for bubble shape, rect for everything else
+          if (b.shape === 'bubble') {
+            if ((lx / ra) * (lx / ra) + (ly / rb) * (ly / rb) > 1) continue
+          } else {
             if (Math.abs(lx) > ra || Math.abs(ly) > rb) continue
           }
           const idx = (y * W + x) * 4
@@ -685,61 +682,105 @@ async function processAll(
       // ── Solid background → fill with sampled color ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
-      const { r, g, b: bl, dilation: HALO_DILATION } = solidColors.get(i)!
-      const fillRect = (x1: number, y1: number, x2: number, y2: number) => {
-        for (let y = y1; y <= y2; y++)
-          for (let x = x1; x <= x2; x++) {
-            const idx = (y * W + x) * 4
-            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
-          }
-      }
-      if (textMask) {
-        // Dilate the heatmap mask by HALO_DILATION px (adaptive: 3 or 6 based on detected halo thickness).
-        // Fill boundary also extends by HALO_DILATION so halos outside the tight text box are covered.
-        const fx1 = Math.max(0, tx1 - BG_PADDING - HALO_DILATION)
-        const fy1 = Math.max(0, ty1 - BG_PADDING - HALO_DILATION)
-        const fx2 = Math.min(W - 1, tx2 + BG_PADDING + HALO_DILATION)
-        const fy2 = Math.min(H - 1, ty2 + BG_PADDING + HALO_DILATION)
-        let wrote = false
-        for (let y = fy1; y <= fy2; y++) {
-          for (let x = fx1; x <= fx2; x++) {
-            let hit = false
-            for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !hit; dy++)
-              for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !hit; dx++) {
-                const ny = y + dy, nx = x + dx
-                if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) hit = true
-              }
-            if (!hit) continue
-            const idx = (y * W + x) * 4
-            outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
-            wrote = true
+
+      if (b.is_background === true) {
+        // User-flagged background: sample color from ring outside the detection box
+        // (guaranteed background pixels, not halos), then flood-fill the entire box.
+        const ringFreq = new Map<number, { count: number; r: number; g: number; b: number }>()
+        const rx1 = Math.max(0, tx1 - SOLID_RING), ry1 = Math.max(0, ty1 - SOLID_RING)
+        const rx2 = Math.min(W - 1, tx2 + SOLID_RING), ry2 = Math.min(H - 1, ty2 + SOLID_RING)
+        for (let y = ry1; y <= ry2; y += 2) {
+          for (let x = rx1; x <= rx2; x += 2) {
+            if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue  // skip inside box
+            if (textMask && textMask[y * W + x] > 0) continue            // skip text pixels
+            const p = (y * W + x) * 4
+            const r = origPixels[p], g = origPixels[p + 1], bv = origPixels[p + 2]
+            // Quantize to nearest 8 so near-identical shades share a bucket
+            const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bv >> 3)
+            const entry = ringFreq.get(key)
+            if (entry) { entry.count++; entry.r += r; entry.g += g; entry.b += bv }
+            else ringFreq.set(key, { count: 1, r, g, b: bv })
           }
         }
-        // Fallback: mask had no hot pixels for this bubble (low-confidence small text) → fill rect directly
-        if (!wrote) fillRect(fx1, fy1, fx2, fy2)
-      } else {
-        // No heatmap: fill padded bounding box, rotated if needed
-        const sx1 = Math.max(0, tx1 - BG_PADDING), sy1 = Math.max(0, ty1 - BG_PADDING)
-        const sx2 = Math.min(W - 1, tx2 + BG_PADDING), sy2 = Math.min(H - 1, ty2 + BG_PADDING)
+        let best = { count: 0, r: 0, g: 0, b: 0 }
+        for (const entry of ringFreq.values()) if (entry.count > best.count) best = entry
+        const fr = best.count > 0 ? Math.round(best.r / best.count) : 0
+        const fg = best.count > 0 ? Math.round(best.g / best.count) : 0
+        const fb = best.count > 0 ? Math.round(best.b / best.count) : 0
         if (b.rotation) {
-          const ang2 = -b.rotation * Math.PI / 180
-          const cos2 = Math.cos(ang2), sin2 = Math.sin(ang2)
-          const rcx = (sx1 + sx2) / 2, rcy = (sy1 + sy2) / 2
-          const rw = (sx2 - sx1) / 2, rh = (sy2 - sy1) / 2
-          const ehx = rw * Math.abs(cos2) + rh * Math.abs(sin2)
-          const ehy = rw * Math.abs(sin2) + rh * Math.abs(cos2)
-          for (let y = Math.max(0, Math.floor(rcy - ehy)); y <= Math.min(H - 1, Math.ceil(rcy + ehy)); y++) {
+          const ang = -b.rotation * Math.PI / 180
+          const cosA = Math.cos(ang), sinA = Math.sin(ang)
+          const rcx = (tx1 + tx2) / 2, rcy = (ty1 + ty2) / 2
+          const rw = (tx2 - tx1) / 2, rh = (ty2 - ty1) / 2
+          const ehx = rw * Math.abs(cosA) + rh * Math.abs(sinA)
+          const ehy = rw * Math.abs(sinA) + rh * Math.abs(cosA)
+          for (let y = Math.max(0, Math.floor(rcy - ehy)); y <= Math.min(H - 1, Math.ceil(rcy + ehy)); y++)
             for (let x = Math.max(0, Math.floor(rcx - ehx)); x <= Math.min(W - 1, Math.ceil(rcx + ehx)); x++) {
               const dx = x - rcx, dy = y - rcy
-              const lx = dx * cos2 - dy * sin2
-              const ly = dx * sin2 + dy * cos2
+              const lx = dx * cosA - dy * sinA, ly = dx * sinA + dy * cosA
               if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+              const idx = (y * W + x) * 4
+              outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
+            }
+        } else {
+          for (let y = ty1; y <= ty2; y++)
+            for (let x = tx1; x <= tx2; x++) {
+              const idx = (y * W + x) * 4
+              outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
+            }
+        }
+      } else {
+        // Auto-detected solid: dilate textMask and fill with pre-sampled color.
+        const { r, g, b: bl, dilation: HALO_DILATION } = solidColors.get(i)!
+        const fillRect = (x1: number, y1: number, x2: number, y2: number) => {
+          for (let y = y1; y <= y2; y++)
+            for (let x = x1; x <= x2; x++) {
               const idx = (y * W + x) * 4
               outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
             }
+        }
+        if (textMask) {
+          const fx1 = Math.max(0, tx1 - BG_PADDING - HALO_DILATION)
+          const fy1 = Math.max(0, ty1 - BG_PADDING - HALO_DILATION)
+          const fx2 = Math.min(W - 1, tx2 + BG_PADDING + HALO_DILATION)
+          const fy2 = Math.min(H - 1, ty2 + BG_PADDING + HALO_DILATION)
+          let wrote = false
+          for (let y = fy1; y <= fy2; y++) {
+            for (let x = fx1; x <= fx2; x++) {
+              let hit = false
+              for (let dy = -HALO_DILATION; dy <= HALO_DILATION && !hit; dy++)
+                for (let dx = -HALO_DILATION; dx <= HALO_DILATION && !hit; dx++) {
+                  const ny = y + dy, nx = x + dx
+                  if (ny >= 0 && ny < H && nx >= 0 && nx < W && textMask[ny * W + nx] > 0) hit = true
+                }
+              if (!hit) continue
+              const idx = (y * W + x) * 4
+              outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
+              wrote = true
+            }
           }
+          if (!wrote) fillRect(fx1, fy1, fx2, fy2)
         } else {
-          fillRect(sx1, sy1, sx2, sy2)
+          const sx1 = Math.max(0, tx1 - BG_PADDING), sy1 = Math.max(0, ty1 - BG_PADDING)
+          const sx2 = Math.min(W - 1, tx2 + BG_PADDING), sy2 = Math.min(H - 1, ty2 + BG_PADDING)
+          if (b.rotation) {
+            const ang2 = -b.rotation * Math.PI / 180
+            const cos2 = Math.cos(ang2), sin2 = Math.sin(ang2)
+            const rcx = (sx1 + sx2) / 2, rcy = (sy1 + sy2) / 2
+            const rw = (sx2 - sx1) / 2, rh = (sy2 - sy1) / 2
+            const ehx = rw * Math.abs(cos2) + rh * Math.abs(sin2)
+            const ehy = rw * Math.abs(sin2) + rh * Math.abs(cos2)
+            for (let y = Math.max(0, Math.floor(rcy - ehy)); y <= Math.min(H - 1, Math.ceil(rcy + ehy)); y++)
+              for (let x = Math.max(0, Math.floor(rcx - ehx)); x <= Math.min(W - 1, Math.ceil(rcx + ehx)); x++) {
+                const dx = x - rcx, dy = y - rcy
+                const lx = dx * cos2 - dy * sin2, ly = dx * sin2 + dy * cos2
+                if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+                const idx = (y * W + x) * 4
+                outData[idx] = r; outData[idx + 1] = g; outData[idx + 2] = bl; outData[idx + 3] = 255
+              }
+          } else {
+            fillRect(sx1, sy1, sx2, sy2)
+          }
         }
       }
     } else {

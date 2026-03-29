@@ -21,6 +21,7 @@ export interface MangaBubble {
   inpaint_color?: string  // hex color override for inpaint fill (e.g. '#f0e8d0'); undefined = auto-detect
   is_background?: boolean // inpaint route override: true = force solid fill, false = force bubble fill, undefined = auto
   rotation?: number       // degrees clockwise; applied to both inpaint fill and typeset text
+  text_color?: 'black' | 'white'  // typeset text color; undefined = black
   det_conf?: number         // detection confidence score (debug only)
   det_mask_density?: number // fraction of box pixels flagged as text by heatmap (debug only)
 }

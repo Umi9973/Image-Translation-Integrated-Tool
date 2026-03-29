@@ -510,10 +510,12 @@ export function renderTypesetToCanvas(
       const totalH = lines.length * lineH
       const startY = by + (bh - totalH) / 2 + lineH / 2 + offY
       const cx = bx + bw / 2 + offX
+      const hFill   = bubble.text_color === 'white' ? '#ffffff' : '#1a1a1a'
+      const hStroke = bubble.text_color === 'white' ? '#1a1a1a' : 'white'
       lines.forEach((line, i) => {
-        ctx.strokeStyle = 'white'; ctx.lineWidth = strokeWidth * 2; ctx.lineJoin = 'round'
+        ctx.strokeStyle = hStroke; ctx.lineWidth = strokeWidth * 2; ctx.lineJoin = 'round'
         ctx.strokeText(line, cx, startY + i * lineH)
-        ctx.fillStyle = '#1a1a1a'
+        ctx.fillStyle = hFill
         ctx.fillText(line, cx, startY + i * lineH)
       })
       ctx.restore()
@@ -581,6 +583,8 @@ export function renderTypesetToCanvas(
     const strokeWidth = Math.max(1, fontSize * 0.14)
     const dotRadius   = fontSize * DOT_RADIUS_FACTOR
     const dotStride   = fontSize * DOT_STRIDE_FACTOR
+    const vFill   = bubble.text_color === 'white' ? '#ffffff' : '#1a1a1a'
+    const vStroke = bubble.text_color === 'white' ? '#1a1a1a' : 'white'
 
     // Glyphs that are horizontal by nature and need 90° rotation in vertical
     // layout. SVG writing-mode handles this automatically; canvas does not.
@@ -601,11 +605,11 @@ export function renderTypesetToCanvas(
             ctx.save()
             ctx.beginPath()
             ctx.arc(cx, dotCy, outerR, 0, Math.PI * 2)
-            ctx.fillStyle = 'white'
+            ctx.fillStyle = vStroke
             ctx.fill()
             ctx.beginPath()
             ctx.arc(cx, dotCy, dotRadius, 0, Math.PI * 2)
-            ctx.fillStyle = '#1a1a1a'
+            ctx.fillStyle = vFill
             ctx.fill()
             ctx.restore()
             y += dotStride
@@ -615,20 +619,20 @@ export function renderTypesetToCanvas(
             ctx.save()
             ctx.translate(cx, y + fontSize * 0.5)
             ctx.rotate(Math.PI / 2)
-            ctx.strokeStyle = 'white'
+            ctx.strokeStyle = vStroke
             ctx.lineWidth   = strokeWidth * 2
             ctx.lineJoin    = 'round'
             ctx.strokeText(ch, 0, -fontSize * 0.5)
-            ctx.fillStyle = '#1a1a1a'
+            ctx.fillStyle = vFill
             ctx.fillText(ch, 0, -fontSize * 0.5)
             ctx.restore()
             y += fontSize
           } else {
-            ctx.strokeStyle   = 'white'
+            ctx.strokeStyle   = vStroke
             ctx.lineWidth     = strokeWidth * 2
             ctx.lineJoin      = 'round'
             ctx.strokeText(ch, cx, y)
-            ctx.fillStyle = '#1a1a1a'
+            ctx.fillStyle = vFill
             ctx.fillText(ch, cx, y)
             y += fontSize
           }
@@ -746,8 +750,8 @@ export function renderTypeset(
       }
       g.setAttribute('font-family', FONT_FAMILY)
       g.setAttribute('font-size', String(fontSize))
-      g.setAttribute('fill', '#1a1a1a')
-      g.setAttribute('stroke', 'white')
+      g.setAttribute('fill', bubble.text_color === 'white' ? '#ffffff' : '#1a1a1a')
+      g.setAttribute('stroke', bubble.text_color === 'white' ? '#1a1a1a' : 'white')
       g.setAttribute('stroke-width', String(Math.max(1, fontSize * 0.14)))
       g.setAttribute('stroke-linejoin', 'round')
       g.setAttribute('paint-order', 'stroke')
