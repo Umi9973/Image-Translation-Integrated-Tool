@@ -431,3 +431,36 @@ const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bv >> 3)
 Added a per-bubble text color option (`black` or `white`) to the editor panel. Default is black (`#1a1a1a` fill, white outline). Selecting white inverts to `#ffffff` fill, `#1a1a1a` outline — useful for dark-background bubbles or background text on black panels.
 
 The field `text_color?: 'black' | 'white'` was added to `MangaBubble`. All four canvas/SVG rendering paths in `typeset.ts` (horizontal text, vertical regular chars, vertical rotated dashes, SVG) read `bubble.text_color` to derive fill and stroke colors.
+
+---
+
+## Issue #11 — Background text fill was rectangular even for bubble-shaped boxes
+
+**Status:** Fixed
+**Date:** 2026-04-12
+**Affected file:** `src/workers/inpaint.worker.ts`
+
+### Symptom
+When a box had both `is_background === true` (Background text checked) and `shape === 'bubble'`, the inpaint fill was still a rectangle, not an ellipse. The rectangular fill extended into the corners outside the oval bubble border, leaving visible filled corners.
+
+### Root cause
+The `is_background === true` fill path had no shape awareness at all. It only handled two cases: rotation (rotated rect) and no-rotation (plain axis-aligned rect). The ellipse fill logic existed only in the white route, not in the background/solid route. So bubble-shape was completely ignored when `is_background` was set.
+
+### Fix
+Added shape-aware fill to the `is_background === true` path for all four combinations:
+
+- **Rotation + bubble**: iterate rotated AABB, apply ellipse test in local frame (`(lx/rw)² + (ly/rh)² > 1`)
+- **Rotation + rect**: existing rotated rect logic
+- **No rotation + bubble**: iterate tight rect, apply ellipse test
+- **No rotation + rect**: existing axis-aligned rect loop
+
+```typescript
+if (b.shape === 'bubble') {
+  if ((lx / rw) * (lx / rw) + (ly / rh) * (ly / rh) > 1) continue
+} else {
+  if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+}
+```
+
+### General lesson
+Shape-aware fill logic must be applied consistently across **all** fill routes (white, solid, background). Adding it to one route and not others means the fix only works for specific configurations.

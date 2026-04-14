@@ -718,7 +718,21 @@ async function processAll(
             for (let x = Math.max(0, Math.floor(rcx - ehx)); x <= Math.min(W - 1, Math.ceil(rcx + ehx)); x++) {
               const dx = x - rcx, dy = y - rcy
               const lx = dx * cosA - dy * sinA, ly = dx * sinA + dy * cosA
-              if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+              if (b.shape === 'bubble') {
+                if ((lx / rw) * (lx / rw) + (ly / rh) * (ly / rh) > 1) continue
+              } else {
+                if (Math.abs(lx) > rw || Math.abs(ly) > rh) continue
+              }
+              const idx = (y * W + x) * 4
+              outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
+            }
+        } else if (b.shape === 'bubble') {
+          const ra = (tx2 - tx1) / 2, rb = (ty2 - ty1) / 2
+          const ecx = (tx1 + tx2) / 2, ecy = (ty1 + ty2) / 2
+          for (let y = ty1; y <= ty2; y++)
+            for (let x = tx1; x <= tx2; x++) {
+              const lx = x - ecx, ly = y - ecy
+              if ((lx / ra) * (lx / ra) + (ly / rb) * (ly / rb) > 1) continue
               const idx = (y * W + x) * 4
               outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
             }
