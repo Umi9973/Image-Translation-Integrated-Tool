@@ -136,7 +136,7 @@ function sampleBackgroundFromMask(
   W: number, H: number,
   tx1: number, ty1: number, tx2: number, ty2: number,
   textMask: Uint8Array,
-): { r: number; g: number; b: number; lum: number; solid: boolean; dilation: number } {
+): { r: number; g: number; b: number; lum: number; solid: boolean; dilation: number; rough_bg_lum: number; halo_dilation: number } {
   const mean   = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length
   const stddev = (a: number[], m: number) => Math.sqrt(a.reduce((s, v) => s + (v - m) ** 2, 0) / a.length)
   const STEP = 3
@@ -226,7 +226,7 @@ function sampleBackgroundFromMask(
     }
   }
 
-  if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false, dilation: HALO_DILATION }
+  if (rs.length < 4) return { r: 128, g: 128, b: 128, lum: 128, solid: false, dilation: HALO_DILATION, rough_bg_lum: roughBgLum, halo_dilation: HALO_DILATION }
 
   // Mode (binned by 8) for fill color — finds the dominant background value
   // robustly, ignoring any remaining outliers.
@@ -242,7 +242,7 @@ function sampleBackgroundFromMask(
   const meanR = mean(rs), meanG = mean(gs), meanB = mean(bs)
   const lum  = mr * 0.299 + mg * 0.587 + mb * 0.114
   const solid = Math.max(stddev(rs, meanR), stddev(gs, meanG), stddev(bs, meanB)) < SOLID_THRESH
-  return { r: mr, g: mg, b: mb, lum, solid, dilation: HALO_DILATION }
+  return { r: mr, g: mg, b: mb, lum, solid, dilation: HALO_DILATION, rough_bg_lum: roughBgLum, halo_dilation: HALO_DILATION }
 }
 
 // ── Solid background detection ────────────────────────────────────────────────
@@ -558,6 +558,7 @@ async function processAll(
   type Route = 'white' | 'solid' | 'lama'
   const dbg: object[] = []
   const solidColors: Map<number, { r: number; g: number; b: number; dilation: number }> = new Map()
+  const fullBoxFill = new Set<number>() // bubbles that need full-box solid fill (grey screentone detected)
   const routes: Route[] = bubbles.map((b, i) => {
     const tx1 = Math.floor((b.rect.x / 100) * W)
     const ty1 = Math.floor((b.rect.y / 100) * H)
@@ -571,7 +572,7 @@ async function processAll(
       const g = parseInt(hex.slice(2, 4), 16)
       const bv = parseInt(hex.slice(4, 6), 16)
       solidColors.set(i, { r, g, b: bv, dilation: 3 })
-      dbg.push({ id: b.id, rect_pct: b.rect, route: 'solid', colorOverride: b.inpaint_color })
+      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'solid', color_override: b.inpaint_color, fill_rgb: [parseInt(b.inpaint_color.slice(1,3),16), parseInt(b.inpaint_color.slice(3,5),16), parseInt(b.inpaint_color.slice(5,7),16)], rect_pct: b.rect })
       return 'solid'
     }
     if (b.is_background === true) {
@@ -581,23 +582,81 @@ async function processAll(
         : sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
       const dilation = textMask ? (color as ReturnType<typeof sampleBackgroundFromMask>).dilation : 3
       solidColors.set(i, { r: color.r, g: color.g, b: color.b, dilation })
-      dbg.push({ id: b.id, rect_pct: b.rect, route: 'solid', forced: true })
+      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'solid', forced_background: true, fill_rgb: [color.r, color.g, color.b], rect_pct: b.rect })
       return 'solid'
     }
     if (b.is_background === false) {
       // User-forced bubble route: skip auto-detect, go straight to white/bubble fill
-      dbg.push({ id: b.id, rect_pct: b.rect, route: 'white', forced: true })
+      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'white', forced_white: true, rect_pct: b.rect })
       return 'white'
     }
     if (textMask) {
       const bg = sampleBackgroundFromMask(origPixels, W, H, tx1, ty1, tx2, ty2, textMask)
-      dbgExtra = { maskUsed: true, bgLum: +bg.lum.toFixed(1), bgSolid: bg.solid, bgRgb: [bg.r, bg.g, bg.b] }
-      if (bg.r > 240 && bg.g > 240 && bg.b > 240) {
-        // Truly white speech bubble — use white route (scans full bubble bounds)
-        route = 'white'
+      const whiteCheckTriggered = bg.r > 240 && bg.g > 240 && bg.b > 240
+      dbgExtra = {
+        mask_used: true,
+        halo_band_rgb: [bg.r, bg.g, bg.b],
+        halo_band_lum: +bg.lum.toFixed(1),
+        halo_band_solid: bg.solid,
+        rough_bg_lum: +bg.rough_bg_lum.toFixed(1),
+        halo_dilation: bg.halo_dilation,
+        white_check_triggered: whiteCheckTriggered,
+      }
+      if (whiteCheckTriggered) {
+        // Verify by sampling ALL interior pixels (including textMask-flagged ones).
+        // Screentone dots are flagged as text by the mask, so non-text sampling returns
+        // near-white even on grey screentone backgrounds. Including all pixels gives
+        // the true perceived luminance: screentone 20% dots → mean ~204, 30% → ~178.
+        let allLumSum = 0, allLumCount = 0
+        for (let y = ty1; y <= ty2; y += 3)
+          for (let x = tx1; x <= tx2; x += 3) {
+            const p = (y * W + x) * 4
+            allLumSum += origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
+            allLumCount++
+          }
+        const allInteriorLum = allLumCount > 0 ? +(allLumSum / allLumCount).toFixed(1) : null
+        dbgExtra = { ...dbgExtra, interior_px_count: allLumCount, interior_lum_avg: allInteriorLum }
+        if (allLumCount > 0 && allLumSum / allLumCount < 215) {
+          // Interior mean is below white threshold — could be screentone grey or dense text on white.
+          // Disambiguate with a narrow ring (6px) just outside the text rect, sampling ALL pixels
+          // but excluding very dark ones (bubble border / artwork outside = lum < 50).
+          // White bubble: ring is white interior (mean ≈ 255).
+          // Grey screentone: ring has screentone pattern (mean ≈ 180–220).
+          const GREY_RING = 6
+          let ringR = 0, ringG = 0, ringB = 0, ringN = 0
+          const rx1 = Math.max(0, tx1 - GREY_RING), ry1 = Math.max(0, ty1 - GREY_RING)
+          const rx2 = Math.min(W - 1, tx2 + GREY_RING), ry2 = Math.min(H - 1, ty2 + GREY_RING)
+          for (let y = ry1; y <= ry2; y += 2)
+            for (let x = rx1; x <= rx2; x += 2) {
+              if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue
+              const p = (y * W + x) * 4
+              const lum = origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
+              if (lum < 50) continue  // exclude bubble border / dark artwork
+              ringR += origPixels[p]; ringG += origPixels[p + 1]; ringB += origPixels[p + 2]; ringN++
+            }
+          const ringMean = ringN > 0 ? (ringR * 0.299 + ringG * 0.587 + ringB * 0.114) / ringN : 255
+          dbgExtra = { ...dbgExtra, ring_mean: +ringMean.toFixed(1), ring_px_count: ringN }
+          if (ringMean < 220) {
+            // Ring is grey — confirmed screentone/grey bubble. Fill entire box with ring color.
+            const cr = ringN > 0 ? Math.round(ringR / ringN) : 128
+            const cg = ringN > 0 ? Math.round(ringG / ringN) : 128
+            const cb = ringN > 0 ? Math.round(ringB / ringN) : 128
+            solidColors.set(i, { r: cr, g: cg, b: cb, dilation: bg.dilation })
+            fullBoxFill.add(i)
+            dbgExtra = { ...dbgExtra, interior_override: true, interior_rgb: [cr, cg, cb], fill_rgb: [cr, cg, cb] }
+            route = 'solid'
+          } else {
+            // Ring is white — dark interior pixels are text strokes, not screentone. Route white.
+            dbgExtra = { ...dbgExtra, interior_override: false }
+            route = 'white'
+          }
+        } else {
+          dbgExtra = { ...dbgExtra, interior_override: false }
+          route = 'white'
+        }
       } else if (bg.lum > 180 || bg.solid || !LAMA_ENABLED) {
-        // Bright or solid-color background — fill with the actual sampled color
         solidColors.set(i, { r: bg.r, g: bg.g, b: bg.b, dilation: bg.dilation })
+        dbgExtra = { ...dbgExtra, fill_rgb: [bg.r, bg.g, bg.b] }
         route = 'solid'
       } else {
         route = 'lama'
@@ -605,18 +664,35 @@ async function processAll(
     } else {
       const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
       const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
-      dbgExtra = { maskUsed: false, bright, borderRgb: [border.r, border.g, border.b] }
-      if (bright && border.r > 240 && border.g > 240 && border.b > 240) {
-        // Truly white — use white route for full bubble coverage
-        route = 'white'
+      const whiteCheckTriggered = bright && border.r > 240 && border.g > 240 && border.b > 240
+      dbgExtra = { mask_used: false, bright, border_rgb: [border.r, border.g, border.b], white_check_triggered: whiteCheckTriggered }
+      if (whiteCheckTriggered) {
+        let lumSum = 0, lumCount = 0
+        for (let y = ty1; y <= ty2; y += 4)
+          for (let x = tx1; x <= tx2; x += 4) {
+            const p = (y * W + x) * 4
+            lumSum += origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
+            lumCount++
+          }
+        const interiorLumAvg = lumCount > 0 ? +(lumSum / lumCount).toFixed(1) : null
+        dbgExtra = { ...dbgExtra, interior_px_count: lumCount, interior_lum_avg: interiorLumAvg }
+        if (lumCount > 0 && lumSum / lumCount < 220) {
+          solidColors.set(i, { ...border, dilation: 3 })
+          dbgExtra = { ...dbgExtra, interior_override: true, fill_rgb: [border.r, border.g, border.b] }
+          route = 'solid'
+        } else {
+          dbgExtra = { ...dbgExtra, interior_override: false }
+          route = 'white'
+        }
       } else if (bright || border.solid || !LAMA_ENABLED) {
         solidColors.set(i, { ...border, dilation: 3 })
+        dbgExtra = { ...dbgExtra, fill_rgb: [border.r, border.g, border.b] }
         route = 'solid'
       } else {
         route = 'lama'
       }
     }
-    dbg.push({ id: b.id, rect_pct: b.rect, route, ...dbgExtra })
+    dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route, rect_pct: b.rect, ...dbgExtra })
     return route
   })
 
@@ -683,30 +759,36 @@ async function processAll(
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (solid fill)…` })
 
-      if (b.is_background === true) {
-        // User-flagged background: sample color from ring outside the detection box
-        // (guaranteed background pixels, not halos), then flood-fill the entire box.
-        const ringFreq = new Map<number, { count: number; r: number; g: number; b: number }>()
-        const rx1 = Math.max(0, tx1 - SOLID_RING), ry1 = Math.max(0, ty1 - SOLID_RING)
-        const rx2 = Math.min(W - 1, tx2 + SOLID_RING), ry2 = Math.min(H - 1, ty2 + SOLID_RING)
-        for (let y = ry1; y <= ry2; y += 2) {
-          for (let x = rx1; x <= rx2; x += 2) {
-            if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue  // skip inside box
-            if (textMask && textMask[y * W + x] > 0) continue            // skip text pixels
-            const p = (y * W + x) * 4
-            const r = origPixels[p], g = origPixels[p + 1], bv = origPixels[p + 2]
-            // Quantize to nearest 8 so near-identical shades share a bucket
-            const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bv >> 3)
-            const entry = ringFreq.get(key)
-            if (entry) { entry.count++; entry.r += r; entry.g += g; entry.b += bv }
-            else ringFreq.set(key, { count: 1, r, g, b: bv })
+      if (b.is_background === true || fullBoxFill.has(i)) {
+        // Full-box fill: flood the entire box with the background color.
+        // For is_background=true: sample color from ring outside the box.
+        // For fullBoxFill (auto-detected grey/screentone): color already in solidColors from routing.
+        let fr: number, fg: number, fb: number
+        if (fullBoxFill.has(i)) {
+          const sc = solidColors.get(i)!
+          fr = sc.r; fg = sc.g; fb = sc.b
+        } else {
+          const ringFreq = new Map<number, { count: number; r: number; g: number; b: number }>()
+          const rx1 = Math.max(0, tx1 - SOLID_RING), ry1 = Math.max(0, ty1 - SOLID_RING)
+          const rx2 = Math.min(W - 1, tx2 + SOLID_RING), ry2 = Math.min(H - 1, ty2 + SOLID_RING)
+          for (let y = ry1; y <= ry2; y += 2) {
+            for (let x = rx1; x <= rx2; x += 2) {
+              if (x >= tx1 && x <= tx2 && y >= ty1 && y <= ty2) continue
+              if (textMask && textMask[y * W + x] > 0) continue
+              const p = (y * W + x) * 4
+              const r = origPixels[p], g = origPixels[p + 1], bv = origPixels[p + 2]
+              const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (bv >> 3)
+              const entry = ringFreq.get(key)
+              if (entry) { entry.count++; entry.r += r; entry.g += g; entry.b += bv }
+              else ringFreq.set(key, { count: 1, r, g, b: bv })
+            }
           }
+          let best = { count: 0, r: 0, g: 0, b: 0 }
+          for (const entry of ringFreq.values()) if (entry.count > best.count) best = entry
+          fr = best.count > 0 ? Math.round(best.r / best.count) : 0
+          fg = best.count > 0 ? Math.round(best.g / best.count) : 0
+          fb = best.count > 0 ? Math.round(best.b / best.count) : 0
         }
-        let best = { count: 0, r: 0, g: 0, b: 0 }
-        for (const entry of ringFreq.values()) if (entry.count > best.count) best = entry
-        const fr = best.count > 0 ? Math.round(best.r / best.count) : 0
-        const fg = best.count > 0 ? Math.round(best.g / best.count) : 0
-        const fb = best.count > 0 ? Math.round(best.b / best.count) : 0
         if (b.rotation) {
           const ang = -b.rotation * Math.PI / 180
           const cosA = Math.cos(ang), sinA = Math.sin(ang)

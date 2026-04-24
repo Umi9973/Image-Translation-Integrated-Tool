@@ -1410,15 +1410,11 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       )
 
       // Write expanded bubble interior rects back into each speech bubble
-      const expandedIds = new Set(expandedRects.map(r => r.id))
       for (const { id, rect, fillColor } of expandedRects) {
         const b = bubbles.find(b => b.id === id)
         // Don't cache white — white bubbles should always re-route through the white path,
         // not be forced to the solid route via inpaint_color on subsequent runs.
         if (b) { b.bubble_rect = rect; if (fillColor && fillColor !== '#ffffff') b.inpaint_color = fillColor }
-      }
-      for (const b of bubbles) {
-        if (b.is_background === undefined) b.is_background = !expandedIds.has(b.id)
       }
 
       // resultBlob is a transparent PNG overlay — speech bubble text rects are white,
