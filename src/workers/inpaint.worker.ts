@@ -530,8 +530,37 @@ async function inpaintBackground(
 // ── Main pass ──────────────────────────────────────────────────────────────────
 
 interface RectPct { x: number; y: number; w: number; h: number }
-interface BubbleMsg { id: string; rect: RectPct; shape?: string; inpaint_color?: string; is_background?: boolean; rotation?: number }
+interface BubbleMsg { id: string; rect: RectPct; shape?: string; points?: { x: number; y: number }[]; inpaint_color?: string; is_background?: boolean; rotation?: number }
 interface ExpandedRect { id: string; rect: RectPct; fillColor?: string }
+
+// ── Freehand polygon rasterizer ─────────────────────────────────────────────
+// Converts a polygon (percentage-coords already converted to pixel-coords) into
+// a 1-bit bitmask (Uint8Array, 1=inside). Uses even-odd scan-line fill so
+// self-intersecting lasso paths are handled naturally.
+// Sampling at y+0.5 avoids vertex-on-scanline ambiguity.
+function rasterizePolygon(pts: { x: number; y: number }[], W: number, H: number): Uint8Array {
+  const mask = new Uint8Array(W * H)
+  let yMin = Infinity, yMax = -Infinity
+  for (const p of pts) { if (p.y < yMin) yMin = p.y; if (p.y > yMax) yMax = p.y }
+  yMin = Math.max(0, Math.floor(yMin)); yMax = Math.min(H - 1, Math.ceil(yMax))
+  const n = pts.length
+  for (let y = yMin; y <= yMax; y++) {
+    const sy = y + 0.5  // sample at row center — avoids vertex ambiguity
+    const xs: number[] = []
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n]
+      if ((a.y <= sy && b.y > sy) || (b.y <= sy && a.y > sy)) {
+        xs.push(a.x + ((sy - a.y) / (b.y - a.y)) * (b.x - a.x))
+      }
+    }
+    xs.sort((a, b) => a - b)
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const x1 = Math.max(0, Math.ceil(xs[k])), x2 = Math.min(W - 1, Math.floor(xs[k + 1]))
+      for (let x = x1; x <= x2; x++) mask[y * W + x] = 1
+    }
+  }
+  return mask
+}
 
 async function processAll(
   imageBlob: Blob,
@@ -585,8 +614,8 @@ async function processAll(
       dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'solid', forced_background: true, fill_rgb: [color.r, color.g, color.b], rect_pct: b.rect })
       return 'solid'
     }
-    if (b.is_background === false || b.shape === 'bubble') {
-      // Bubble shape always uses white/oval fill — dilation fill would be rectangular.
+    if (b.is_background === false || b.shape === 'bubble' || b.shape === 'freehand') {
+      // Bubble/freehand shapes always use white fill — dilation fill would be rectangular.
       // is_background===false means user explicitly marked it as a speech bubble.
       dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'white', forced_white: true, rect_pct: b.rect })
       return 'white'
@@ -765,12 +794,20 @@ async function processAll(
       const fg = rN >= 16 ? Math.round(rG / rN) : fallback
       const fb = rN >= 16 ? Math.round(rB / rN) : fallback
 
+      // For freehand shape: rasterize the polygon into a bitmask first, then use O(1) lookup.
       // For bubble shape: fill full bubble interior oval (bx..bx2).
       // For rect shape: fill expanded text rect clamped to bubble bounds.
-      const ex1 = b.shape === 'bubble' ? bx : Math.max(bx, tx1 - WHITE_EXPAND)
-      const ey1 = b.shape === 'bubble' ? by : Math.max(by, ty1 - WHITE_EXPAND)
-      const ex2 = b.shape === 'bubble' ? bx2 : Math.min(bx2, tx2 + WHITE_EXPAND)
-      const ey2 = b.shape === 'bubble' ? by2 : Math.min(by2, ty2 + WHITE_EXPAND)
+      let freehandMask: Uint8Array | null = null
+      if (b.shape === 'freehand' && b.points && b.points.length >= 3) {
+        freehandMask = rasterizePolygon(
+          b.points.map(p => ({ x: p.x / 100 * W, y: p.y / 100 * H })),
+          W, H,
+        )
+      }
+      const ex1 = (b.shape === 'bubble' || b.shape === 'freehand') ? bx : Math.max(bx, tx1 - WHITE_EXPAND)
+      const ey1 = (b.shape === 'bubble' || b.shape === 'freehand') ? by : Math.max(by, ty1 - WHITE_EXPAND)
+      const ex2 = (b.shape === 'bubble' || b.shape === 'freehand') ? bx2 : Math.min(bx2, tx2 + WHITE_EXPAND)
+      const ey2 = (b.shape === 'bubble' || b.shape === 'freehand') ? by2 : Math.min(by2, ty2 + WHITE_EXPAND)
       const ra = (ex2 - ex1) / 2, rb = (ey2 - ey1) / 2
       const fcx = (ex1 + ex2) / 2, fcy = (ey1 + ey2) / 2
       const ang = b.rotation ? -b.rotation * Math.PI / 180 : 0
@@ -787,8 +824,10 @@ async function processAll(
           const dx = x - fcx, dy = y - fcy
           const lx = dx * cosA - dy * sinA
           const ly = dx * sinA + dy * cosA
-          // Use ellipse for bubble shape, rect for everything else
-          if (b.shape === 'bubble') {
+          // Inside test: freehand bitmask → ellipse → rect
+          if (b.shape === 'freehand' && freehandMask) {
+            if (freehandMask[y * W + x] !== 1) continue
+          } else if (b.shape === 'bubble') {
             if ((lx / ra) * (lx / ra) + (ly / rb) * (ly / rb) > 1) continue
           } else {
             if (Math.abs(lx) > ra || Math.abs(ly) > rb) continue
@@ -798,7 +837,8 @@ async function processAll(
         }
       }
       // Update routing debug entry with fill diagnostics
-      const dbgEntry = dbg.find((d: Record<string, unknown>) => d.bubble_no === i + 1)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const dbgEntry = dbg.find((d: any) => d.bubble_no === i + 1)
       if (dbgEntry) Object.assign(dbgEntry, {
         raw_mean: +rawMean.toFixed(1),
         is_light: isLight,

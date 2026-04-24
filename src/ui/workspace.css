@@ -145,6 +145,21 @@
   cursor: move;
 }
 
+/* Lasso button active state */
+#btn-lasso.active { background-color: #0af; color: #000; outline: 2px solid #007acc; }
+
+/* Lasso preview polyline while drawing */
+.lasso-preview {
+  pointer-events: none;
+  stroke: #0af;
+  stroke-width: 0.4;
+  stroke-dasharray: 1 0.5;
+  fill: rgba(100, 180, 255, 0.10);
+}
+
+/* Freehand polygon bubble overlay */
+.bubble-polygon { cursor: move; }
+
 .ws-handle-sq {
   fill: #fff;
   stroke: #ed8936;

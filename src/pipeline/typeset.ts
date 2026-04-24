@@ -129,7 +129,7 @@ function normalizeVertical(text: string): string {
 
 // ── Cover background shape helper ────────────────────────────────────────────
 
-function computeRxRy(w: number, h: number, shape: 'rect' | 'bubble' | undefined): { rx: number; ry: number } {
+function computeRxRy(w: number, h: number, shape: 'rect' | 'bubble' | 'freehand' | undefined): { rx: number; ry: number } {
   if (shape === 'bubble') {
     const r = Math.min(w, h) * 0.40
     return { rx: r, ry: r }

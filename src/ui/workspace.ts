@@ -450,7 +450,7 @@ function rebuildBubbleList(
 // ── SVG overlay ───────────────────────────────────────────────────────────────
 
 // rx/ry in SVG percentage units (viewBox 0 0 100 100)
-function overlayRxRy(rect: { w: number; h: number }, shape: 'rect' | 'bubble' | undefined): number {
+function overlayRxRy(rect: { w: number; h: number }, shape: 'rect' | 'bubble' | 'freehand' | undefined): number {
   if (shape === 'bubble') return Math.min(rect.w, rect.h) * 0.40
   return 0
 }
@@ -479,24 +479,35 @@ function rebuildSvgOverlay(
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 
   bubbles.forEach(bubble => {
-    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-    rect.setAttribute('x', String(bubble.rect.x))
-    rect.setAttribute('y', String(bubble.rect.y))
-    rect.setAttribute('width', String(bubble.rect.w))
-    rect.setAttribute('height', String(bubble.rect.h))
-    const r = overlayRxRy(bubble.rect, bubble.shape)
-    rect.setAttribute('rx', String(r))
-    rect.setAttribute('ry', String(r))
-    rect.setAttribute('vector-effect', 'non-scaling-stroke')
-    if (bubble.rotation) {
-      const cx = bubble.rect.x + bubble.rect.w / 2
-      const cy = bubble.rect.y + bubble.rect.h / 2
-      rect.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, imgW, imgH))
+    if (bubble.shape === 'freehand' && bubble.points && bubble.points.length >= 3) {
+      const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
+      poly.setAttribute('points', bubble.points.map(p => `${p.x},${p.y}`).join(' '))
+      poly.setAttribute('vector-effect', 'non-scaling-stroke')
+      poly.setAttribute('pointer-events', 'fill')
+      poly.classList.add('ws-bubble-rect', 'bubble-polygon')
+      poly.dataset.id = bubble.id
+      poly.addEventListener('mousedown', (e) => { e.preventDefault(); mousedownFn(bubble.id, e) })
+      svg.appendChild(poly)
+    } else {
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rect.setAttribute('x', String(bubble.rect.x))
+      rect.setAttribute('y', String(bubble.rect.y))
+      rect.setAttribute('width', String(bubble.rect.w))
+      rect.setAttribute('height', String(bubble.rect.h))
+      const r = overlayRxRy(bubble.rect, bubble.shape)
+      rect.setAttribute('rx', String(r))
+      rect.setAttribute('ry', String(r))
+      rect.setAttribute('vector-effect', 'non-scaling-stroke')
+      if (bubble.rotation) {
+        const cx = bubble.rect.x + bubble.rect.w / 2
+        const cy = bubble.rect.y + bubble.rect.h / 2
+        rect.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, imgW, imgH))
+      }
+      rect.classList.add('ws-bubble-rect')
+      rect.dataset.id = bubble.id
+      rect.addEventListener('mousedown', (e) => { e.preventDefault(); mousedownFn(bubble.id, e) })
+      svg.appendChild(rect)
     }
-    rect.classList.add('ws-bubble-rect')
-    rect.dataset.id = bubble.id
-    rect.addEventListener('mousedown', (e) => { e.preventDefault(); mousedownFn(bubble.id, e) })
-    svg.appendChild(rect)
   })
 }
 
@@ -593,6 +604,12 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   svg.classList.add('ws-bubble-overlay')
   imageFrame.appendChild(svg)
 
+  svg.addEventListener('mousedown', (e) => {
+    if (!lassoMode) return
+    e.preventDefault()
+    startLassoDraw(e)
+  })
+
   // ── Drag / resize ─────────────────────────────────────────────────────────
   interface DragState {
     mode: 'move' | 'resize'
@@ -600,11 +617,19 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     handle: string
     startPct: { x: number; y: number }
     startRect: { x: number; y: number; w: number; h: number }
+    startPoints?: { x: number; y: number }[]  // snapshot of freehand points at drag start
   }
   let dragState: DragState | null = null
 
   type BubbleShape = 'rect' | 'bubble'
   let drawShape: BubbleShape = 'rect'
+
+  // Lasso draw state
+  let lassoMode = false
+  let lassoDrawing = false
+  let lassoPoints: { x: number; y: number }[] = []
+  let lassoPreviewEl: SVGPolylineElement | null = null
+  let lassoBtn!: HTMLButtonElement  // assigned in controls section below
 
   const ac = new AbortController()
 
@@ -617,21 +642,25 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   }
 
   function syncSvgRect(bubble: MangaBubble): void {
-    const el = svg.querySelector<SVGRectElement>(`[data-id="${bubble.id}"]`)
+    const el = svg.querySelector<SVGElement>(`[data-id="${bubble.id}"]`)
     if (!el) return
-    el.setAttribute('x', String(bubble.rect.x))
-    el.setAttribute('y', String(bubble.rect.y))
-    el.setAttribute('width', String(bubble.rect.w))
-    el.setAttribute('height', String(bubble.rect.h))
-    const r = overlayRxRy(bubble.rect, bubble.shape)
-    el.setAttribute('rx', String(r))
-    el.setAttribute('ry', String(r))
-    if (bubble.rotation) {
-      const cx = bubble.rect.x + bubble.rect.w / 2
-      const cy = bubble.rect.y + bubble.rect.h / 2
-      el.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, img.naturalWidth, img.naturalHeight))
+    if (bubble.shape === 'freehand' && bubble.points) {
+      el.setAttribute('points', bubble.points.map(p => `${p.x},${p.y}`).join(' '))
     } else {
-      el.removeAttribute('transform')
+      el.setAttribute('x', String(bubble.rect.x))
+      el.setAttribute('y', String(bubble.rect.y))
+      el.setAttribute('width', String(bubble.rect.w))
+      el.setAttribute('height', String(bubble.rect.h))
+      const r = overlayRxRy(bubble.rect, bubble.shape)
+      el.setAttribute('rx', String(r))
+      el.setAttribute('ry', String(r))
+      if (bubble.rotation) {
+        const cx = bubble.rect.x + bubble.rect.w / 2
+        const cy = bubble.rect.y + bubble.rect.h / 2
+        el.setAttribute('transform', overlayRotateTransform(bubble.rotation, cx, cy, img.naturalWidth, img.naturalHeight))
+      } else {
+        el.removeAttribute('transform')
+      }
     }
   }
 
@@ -661,6 +690,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       el.classList.add('ws-handle-sq')
       el.style.cursor = p.cur
       el.addEventListener('mousedown', (e) => {
+        if (lassoMode) return
         e.stopPropagation()
         e.preventDefault()
         dragState = {
@@ -682,6 +712,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   }
 
   document.addEventListener('mousemove', (e: MouseEvent) => {
+    if (lassoDrawing) { continueLassoDraw(e); return }
     if (!dragState) return
     const cur = clientToSvgPct(e)
     const dx = cur.x - dragState.startPct.x
@@ -694,6 +725,13 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     if (dragState.mode === 'move') {
       x = Math.max(0, Math.min(100 - sr.w, sr.x + dx))
       y = Math.max(0, Math.min(100 - sr.h, sr.y + dy))
+      // Translate freehand polygon: apply offset relative to startPoints (not current points)
+      // so accumulated floating-point drift never occurs.
+      if (bubble.shape === 'freehand' && dragState.startPoints) {
+        const ptsDx = x - sr.x
+        const ptsDy = y - sr.y
+        bubble.points = dragState.startPoints.map(p => ({ x: p.x + ptsDx, y: p.y + ptsDy }))
+      }
     } else {
       // For rotated bubbles, project drag onto the box's local axes
       let ldx = dx, ldy = dy
@@ -725,7 +763,10 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     renderHandles(bubble)
   }, { signal: ac.signal })
 
-  document.addEventListener('mouseup', () => { dragState = null }, { signal: ac.signal })
+  document.addEventListener('mouseup', () => {
+    if (lassoDrawing) { finishLassoDraw(); return }
+    dragState = null
+  }, { signal: ac.signal })
 
 
   // Controls row
@@ -752,6 +793,19 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   shapeSelect.title = 'Shape for new drawn bubbles'
   shapeSelect.addEventListener('change', () => { drawShape = shapeSelect.value as BubbleShape })
   controls.appendChild(shapeSelect)
+
+  lassoBtn = document.createElement('button')
+  lassoBtn.id = 'btn-lasso'
+  lassoBtn.type = 'button'
+  lassoBtn.className = 'ws-add-box-btn'
+  lassoBtn.textContent = '✏ Lasso'
+  lassoBtn.title = 'Draw a freehand lasso shape over text'
+  lassoBtn.addEventListener('click', () => {
+    lassoMode = !lassoMode
+    lassoBtn.classList.toggle('active', lassoMode)
+    svg.style.cursor = lassoMode ? 'crosshair' : ''
+  })
+  controls.appendChild(lassoBtn)
 
   const ocrBtn = document.createElement('button')
   ocrBtn.type = 'button'
@@ -1104,6 +1158,92 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     ctx.putImageData(entry.data, entry.x, entry.y)
   }
 
+  // ── Lasso draw functions ───────────────────────────────────────────────
+
+  function startLassoDraw(e: MouseEvent): void {
+    lassoDrawing = true
+    lassoPoints = [clientToSvgPct(e)]
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+    poly.classList.add('lasso-preview')
+    svg.appendChild(poly)
+    lassoPreviewEl = poly
+  }
+
+  function continueLassoDraw(e: MouseEvent): void {
+    if (!lassoDrawing) return
+    const pt = clientToSvgPct(e)
+    const last = lassoPoints[lassoPoints.length - 1]
+    const dist = Math.sqrt((pt.x - last.x) ** 2 + (pt.y - last.y) ** 2)
+    if (dist < 3) return  // distance filter: keep path under ~100 points
+    lassoPoints.push(pt)
+    if (lassoPreviewEl) {
+      lassoPreviewEl.setAttribute('points', lassoPoints.map(p => `${p.x},${p.y}`).join(' '))
+    }
+  }
+
+  function finishLassoDraw(): void {
+    lassoDrawing = false
+    lassoPreviewEl?.remove()
+    lassoPreviewEl = null
+
+    const pts = lassoPoints
+    lassoPoints = []
+
+    if (pts.length < 3) return  // not enough points
+
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y)
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    if (maxX - minX < 2 || maxY - minY < 2) return  // bounding box too small
+
+    const rect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    const bubble: MangaBubble = {
+      id: crypto.randomUUID(),
+      rect,
+      points: pts,
+      raw_ja: '',
+      translated_zh: '',
+      state: 'detected',
+      is_locked: false,
+      layer_z: 0,
+      source: 'manual',
+      shape: 'freehand',
+      cover: true,
+    }
+    bubbles.push(bubble)
+    sortedIds = sortBubbleIds(bubbles)
+
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
+    poly.setAttribute('points', pts.map(p => `${p.x},${p.y}`).join(' '))
+    poly.setAttribute('vector-effect', 'non-scaling-stroke')
+    poly.setAttribute('pointer-events', 'fill')
+    poly.classList.add('ws-bubble-rect', 'bubble-polygon')
+    poly.dataset.id = bubble.id
+    poly.addEventListener('mousedown', (ev) => {
+      if (lassoMode) return
+      ev.preventDefault()
+      selectBubble(bubble.id)
+      dragState = {
+        mode: 'move', id: bubble.id, handle: '',
+        startPct: clientToSvgPct(ev),
+        startRect: { ...bubble.rect },
+        startPoints: bubble.points ? [...bubble.points] : undefined,
+      }
+    })
+    svg.appendChild(poly)
+
+    rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
+    countEl.textContent = String(bubbles.length)
+    ocrBtn.disabled = false
+    inpaintBtn.disabled = false
+    selectBubble(bubble.id)
+
+    // Exit lasso mode after drawing
+    lassoMode = false
+    lassoBtn.classList.remove('active')
+    svg.style.cursor = ''
+  }
+
   // ── Manual box creation ────────────────────────────────────────────────
 
   function addManualBubble(rect: { x: number; y: number; w: number; h: number }, shape: BubbleShape = 'rect'): void {
@@ -1134,6 +1274,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     svgRect.classList.add('ws-bubble-rect')
     svgRect.dataset.id = bubble.id
     svgRect.addEventListener('mousedown', (e) => {
+      if (lassoMode) return
       e.preventDefault()
       selectBubble(bubble.id)
       dragState = {
@@ -1204,11 +1345,14 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       statusEl.textContent = `${bubbles.length} text regions found`
 
       rebuildSvgOverlay(bubbles, svg, (id, e) => {
+        if (lassoMode) return
         selectBubble(id)
+        const b = bubbles.find(b => b.id === id)!
         dragState = {
           mode: 'move', id, handle: '',
           startPct: clientToSvgPct(e),
-          startRect: { ...bubbles.find(b => b.id === id)!.rect },
+          startRect: { ...b.rect },
+          startPoints: b.points ? [...b.points] : undefined,
         }
       }, img.naturalWidth, img.naturalHeight)
       rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)

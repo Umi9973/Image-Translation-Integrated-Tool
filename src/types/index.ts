@@ -11,7 +11,8 @@ export interface MangaBubble {
   is_locked: boolean    // user has finalized this bubble
   layer_z: number       // for overlapping bubbles
   source?: 'detected' | 'manual'  // how the bubble was created
-  shape?: 'rect' | 'bubble'       // cover background shape: sharp rect or heavily-rounded
+  shape?: 'rect' | 'bubble' | 'freehand'  // freehand = lasso-drawn polygon; rect/bubble = existing modes
+  points?: { x: number; y: number }[]     // pct coords; set when shape==='freehand', rect is tight bbox of points
   cover?: boolean                 // render background fill behind text in typeset layer
   coverOutline?: boolean          // draw a black border around the cover fill
   font_size_override?: number     // force exact font size in typeset (skips auto-fit); undefined = auto
