@@ -804,6 +804,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     lassoMode = !lassoMode
     lassoBtn.classList.toggle('active', lassoMode)
     svg.style.cursor = lassoMode ? 'crosshair' : ''
+    svg.style.pointerEvents = lassoMode ? 'all' : ''
   })
   controls.appendChild(lassoBtn)
 
@@ -1242,6 +1243,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     lassoMode = false
     lassoBtn.classList.remove('active')
     svg.style.cursor = ''
+    svg.style.pointerEvents = ''
   }
 
   // ── Manual box creation ────────────────────────────────────────────────
