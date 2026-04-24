@@ -1414,7 +1414,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         const b = bubbles.find(b => b.id === id)
         // Don't cache white — white bubbles should always re-route through the white path,
         // not be forced to the solid route via inpaint_color on subsequent runs.
-        if (b) { b.bubble_rect = rect; if (fillColor && fillColor !== '#ffffff') b.inpaint_color = fillColor }
+        if (b) { b.bubble_rect = rect; if (fillColor && fillColor !== '#ffffff' && b.shape !== 'bubble') b.inpaint_color = fillColor }
       }
 
       // resultBlob is a transparent PNG overlay — speech bubble text rects are white,

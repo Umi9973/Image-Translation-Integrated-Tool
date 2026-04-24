@@ -585,8 +585,9 @@ async function processAll(
       dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'solid', forced_background: true, fill_rgb: [color.r, color.g, color.b], rect_pct: b.rect })
       return 'solid'
     }
-    if (b.is_background === false) {
-      // User-forced bubble route: skip auto-detect, go straight to white/bubble fill
+    if (b.is_background === false || b.shape === 'bubble') {
+      // Bubble shape always uses white/oval fill — dilation fill would be rectangular.
+      // is_background===false means user explicitly marked it as a speech bubble.
       dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'white', forced_white: true, rect_pct: b.rect })
       return 'white'
     }
@@ -713,11 +714,71 @@ async function processAll(
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning bubble ${i + 1}/${bubbles.length}…` })
       const [bx, by, bx2, by2] = scanBubbleBounds(origPixels, W, H, tx1, ty1, tx2, ty2)
-      // White route is for white speech bubbles — fill with pure white.
-      const fr = 255, fg = 255, fb = 255
-      // Expand by WHITE_EXPAND px on each side to cover text pixels near the box edge.
-      const ex1 = Math.max(bx, tx1 - WHITE_EXPAND), ey1 = Math.max(by, ty1 - WHITE_EXPAND)
-      const ex2 = Math.min(bx2, tx2 + WHITE_EXPAND), ey2 = Math.min(by2, ty2 + WHITE_EXPAND)
+
+      // Ray-based background color sampling.
+      // Shoot 9 rays outward from each edge of the text rect (36 total).
+      // For each ray, collect pixels until hitting a dark border or image edge.
+      // Accept only rays with low luminance variance — uniform color means clean
+      // bubble interior. High-variance rays (e.g. going through a speech tail into
+      // artwork) are rejected to avoid contaminating the fill color.
+      // Dark bubbles skip the dark-border stop since their interior IS dark.
+      const RAY_SAMPLES = 9
+      const RAY_MIN_LEN = 3
+      const RAY_MAX_VAR = 600  // lum variance threshold (≈ stddev 24)
+      const BORDER_DARK  = 50
+
+      // Quick raw mean to distinguish light vs dark bubble
+      let rawR = 0, rawG = 0, rawB = 0, rawN = 0
+      for (let y = ty1; y <= ty2; y += 4)
+        for (let x = tx1; x <= tx2; x += 4) {
+          const p = (y * W + x) * 4
+          rawR += origPixels[p]; rawG += origPixels[p+1]; rawB += origPixels[p+2]; rawN++
+        }
+      const rawMean = rawN > 0 ? (rawR * 0.299 + rawG * 0.587 + rawB * 0.114) / rawN : 128
+      const isLight = rawMean > 128
+
+      // [edgeCoord, step, perpStart, perpEnd, horizontal]
+      const edges: [number, number, number, number, boolean][] = [
+        [tx1 - 1, -1, ty1, ty2, true ],  // left
+        [tx2 + 1,  1, ty1, ty2, true ],  // right
+        [ty1 - 1, -1, tx1, tx2, false],  // top
+        [ty2 + 1,  1, tx1, tx2, false],  // bottom
+      ]
+      let rR = 0, rG = 0, rB = 0, rN = 0
+      for (const [start, step, perpS, perpE, horiz] of edges) {
+        for (let s = 0; s < RAY_SAMPLES; s++) {
+          const perp = Math.round(perpS + (perpE - perpS) * s / (RAY_SAMPLES - 1))
+          const lums: number[] = []
+          let tR = 0, tG = 0, tB = 0
+          for (let d = 0; d < MAX_EXPAND; d++) {
+            const coord = start + step * d
+            const x = horiz ? coord : perp
+            const y = horiz ? perp  : coord
+            if (x < 0 || x >= W || y < 0 || y >= H) break
+            const p = (y * W + x) * 4
+            const lum = origPixels[p] * 0.299 + origPixels[p+1] * 0.587 + origPixels[p+2] * 0.114
+            if (isLight && lum < BORDER_DARK) break
+            lums.push(lum)
+            tR += origPixels[p]; tG += origPixels[p+1]; tB += origPixels[p+2]
+          }
+          if (lums.length < RAY_MIN_LEN) continue
+          const meanL = lums.reduce((s, v) => s + v, 0) / lums.length
+          const variance = lums.reduce((s, v) => s + (v - meanL) ** 2, 0) / lums.length
+          if (variance > RAY_MAX_VAR) continue
+          rR += tR; rG += tG; rB += tB; rN += lums.length
+        }
+      }
+      const fallback = isLight ? 255 : 0
+      const fr = rN >= 16 ? Math.round(rR / rN) : fallback
+      const fg = rN >= 16 ? Math.round(rG / rN) : fallback
+      const fb = rN >= 16 ? Math.round(rB / rN) : fallback
+
+      // For bubble shape: fill full bubble interior oval (bx..bx2).
+      // For rect shape: fill expanded text rect clamped to bubble bounds.
+      const ex1 = b.shape === 'bubble' ? bx : Math.max(bx, tx1 - WHITE_EXPAND)
+      const ey1 = b.shape === 'bubble' ? by : Math.max(by, ty1 - WHITE_EXPAND)
+      const ex2 = b.shape === 'bubble' ? bx2 : Math.min(bx2, tx2 + WHITE_EXPAND)
+      const ey2 = b.shape === 'bubble' ? by2 : Math.min(by2, ty2 + WHITE_EXPAND)
       const ra = (ex2 - ex1) / 2, rb = (ey2 - ey1) / 2
       const fcx = (ex1 + ex2) / 2, fcy = (ey1 + ey2) / 2
       const ang = b.rotation ? -b.rotation * Math.PI / 180 : 0
