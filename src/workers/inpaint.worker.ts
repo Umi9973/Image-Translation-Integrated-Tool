@@ -665,27 +665,13 @@ async function processAll(
     } else {
       const border = sampleBorderColor(origPixels, W, H, tx1, ty1, tx2, ty2)
       const bright = isBrightRegion(origPixels, W, H, tx1, ty1, tx2, ty2)
-      const whiteCheckTriggered = bright && border.r > 240 && border.g > 240 && border.b > 240
-      dbgExtra = { mask_used: false, bright, border_rgb: [border.r, border.g, border.b], white_check_triggered: whiteCheckTriggered }
-      if (whiteCheckTriggered) {
-        let lumSum = 0, lumCount = 0
-        for (let y = ty1; y <= ty2; y += 4)
-          for (let x = tx1; x <= tx2; x += 4) {
-            const p = (y * W + x) * 4
-            lumSum += origPixels[p] * 0.299 + origPixels[p + 1] * 0.587 + origPixels[p + 2] * 0.114
-            lumCount++
-          }
-        const interiorLumAvg = lumCount > 0 ? +(lumSum / lumCount).toFixed(1) : null
-        dbgExtra = { ...dbgExtra, interior_px_count: lumCount, interior_lum_avg: interiorLumAvg }
-        if (lumCount > 0 && lumSum / lumCount < 220) {
-          solidColors.set(i, { ...border, dilation: 3 })
-          dbgExtra = { ...dbgExtra, interior_override: true, fill_rgb: [border.r, border.g, border.b] }
-          route = 'solid'
-        } else {
-          dbgExtra = { ...dbgExtra, interior_override: false }
-          route = 'white'
-        }
-      } else if (bright || border.solid || !LAMA_ENABLED) {
+      dbgExtra = { mask_used: false, bright, border_rgb: [border.r, border.g, border.b] }
+      // With LaMa disabled, bright interior = speech bubble → white route (ray sampling
+      // determines the actual fill color at fill time). Dark interior = background text
+      // on artwork → solid fill with sampled border color.
+      if (bright) {
+        route = 'white'
+      } else if (border.solid || !LAMA_ENABLED) {
         solidColors.set(i, { ...border, dilation: 3 })
         dbgExtra = { ...dbgExtra, fill_rgb: [border.r, border.g, border.b] }
         route = 'solid'
@@ -745,7 +731,11 @@ async function processAll(
         [ty2 + 1,  1, tx1, tx2, false],  // bottom
       ]
       let rR = 0, rG = 0, rB = 0, rN = 0
-      for (const [start, step, perpS, perpE, horiz] of edges) {
+      const edgeNames = ['left', 'right', 'top', 'bottom']
+      const edgeDbg: object[] = []
+      for (let ei = 0; ei < edges.length; ei++) {
+        const [start, step, perpS, perpE, horiz] = edges[ei]
+        let edgeAccepted = 0, edgeRejectedShort = 0, edgeRejectedVar = 0
         for (let s = 0; s < RAY_SAMPLES; s++) {
           const perp = Math.round(perpS + (perpE - perpS) * s / (RAY_SAMPLES - 1))
           const lums: number[] = []
@@ -761,12 +751,14 @@ async function processAll(
             lums.push(lum)
             tR += origPixels[p]; tG += origPixels[p+1]; tB += origPixels[p+2]
           }
-          if (lums.length < RAY_MIN_LEN) continue
+          if (lums.length < RAY_MIN_LEN) { edgeRejectedShort++; continue }
           const meanL = lums.reduce((s, v) => s + v, 0) / lums.length
           const variance = lums.reduce((s, v) => s + (v - meanL) ** 2, 0) / lums.length
-          if (variance > RAY_MAX_VAR) continue
+          if (variance > RAY_MAX_VAR) { edgeRejectedVar++; continue }
           rR += tR; rG += tG; rB += tB; rN += lums.length
+          edgeAccepted++
         }
+        edgeDbg.push({ edge: edgeNames[ei], accepted: edgeAccepted, rejected_short: edgeRejectedShort, rejected_var: edgeRejectedVar })
       }
       const fallback = isLight ? 255 : 0
       const fr = rN >= 16 ? Math.round(rR / rN) : fallback
@@ -805,6 +797,15 @@ async function processAll(
           outData[idx] = fr; outData[idx + 1] = fg; outData[idx + 2] = fb; outData[idx + 3] = 255
         }
       }
+      // Update routing debug entry with fill diagnostics
+      const dbgEntry = dbg.find((d: Record<string, unknown>) => d.bubble_no === i + 1)
+      if (dbgEntry) Object.assign(dbgEntry, {
+        raw_mean: +rawMean.toFixed(1),
+        is_light: isLight,
+        accepted_ray_px: rN,
+        fill_rgb: [fr, fg, fb],
+        edges: edgeDbg,
+      })
       expandedRects.push({
         id: b.id,
         rect: {
