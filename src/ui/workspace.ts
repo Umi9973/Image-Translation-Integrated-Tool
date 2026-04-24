@@ -5,7 +5,8 @@ import type { DetectionMask } from '../pipeline/detect'
 import { runOCR } from '../pipeline/ocr'
 import { loadAPIConfig, buildPrompt, translatePage, parseTranslationResponse } from '../pipeline/translate'
 import { inpaintPage } from '../pipeline/inpaint'
-import { renderTypeset, renderTypesetToCanvas } from '../pipeline/typeset'
+import { renderTypeset, renderTypesetToCanvas, parseRuby } from '../pipeline/typeset'
+import type { RubySpan } from '../pipeline/typeset'
 import { openSettings } from './settings'
 import { renderDictPanel, getGlossary } from './dict-panel'
 
@@ -94,6 +95,192 @@ interface EditorCallbacks {
   onIsBackgroundChange: (val: boolean) => void
   onTextColorChange: (color: 'black' | 'white') => void
   onRotationChange: (deg: number | undefined) => void
+}
+
+// ── Ruby panel ────────────────────────────────────────────────────────────────
+
+/** Rebuild translated_zh from clean text + ruby spans (sorted by start). */
+function buildRubyText(clean: string, spans: RubySpan[]): string {
+  const sorted = [...spans].sort((a, b) => a.start - b.start)
+  let result = ''
+  let pos = 0
+  for (const span of sorted) {
+    result += clean.slice(pos, span.start)
+    result += `{${clean.slice(span.start, span.end)}|${span.ruby}}`
+    pos = span.end
+  }
+  return result + clean.slice(pos)
+}
+
+/**
+ * Render the ruby annotation panel below the ZH textarea.
+ * Shows each character as a clickable chip; existing ruby spans are highlighted.
+ * Selecting chips and typing in the input adds/replaces ruby annotations.
+ * Returns the panel element to append into the editor.
+ */
+function renderRubyPanel(
+  initialText: string,
+  onChange: (newText: string) => void,
+): HTMLElement {
+  const section = document.createElement('div')
+  section.className = 'ws-ruby-section'
+
+  const label = document.createElement('div')
+  label.className = 'ws-editor-label'
+  label.textContent = 'Ruby Annotations'
+  section.appendChild(label)
+
+  const chipsContainer = document.createElement('div')
+  chipsContainer.className = 'ws-ruby-chips'
+  section.appendChild(chipsContainer)
+
+  const inputRow = document.createElement('div')
+  inputRow.className = 'ws-ruby-input-row'
+  inputRow.hidden = true
+
+  const rubyInput = document.createElement('input')
+  rubyInput.type = 'text'
+  rubyInput.className = 'ws-ruby-input'
+  rubyInput.placeholder = 'ruby text…'
+
+  const confirmBtn = document.createElement('button')
+  confirmBtn.type = 'button'
+  confirmBtn.className = 'ws-ruby-confirm'
+  confirmBtn.textContent = '✓'
+  confirmBtn.title = 'Apply ruby annotation'
+
+  const cancelBtn = document.createElement('button')
+  cancelBtn.type = 'button'
+  cancelBtn.className = 'ws-ruby-cancel'
+  cancelBtn.textContent = '×'
+  cancelBtn.title = 'Cancel'
+
+  inputRow.appendChild(rubyInput)
+  inputRow.appendChild(confirmBtn)
+  inputRow.appendChild(cancelBtn)
+  section.appendChild(inputRow)
+
+  let selected = new Set<number>()  // selected char indices in clean text
+  let currentText = initialText
+
+  function rebuild(text: string) {
+    currentText = text
+    chipsContainer.innerHTML = ''
+    selected.clear()
+    inputRow.hidden = true
+    rubyInput.value = ''
+
+    const { clean, spans } = parseRuby(text)
+
+    // Map charIndex → span that contains it
+    const charSpan = new Map<number, RubySpan>()
+    for (const span of spans) {
+      for (let i = span.start; i < span.end; i++) charSpan.set(i, span)
+    }
+
+    let globalIdx = 0
+    // Split on \\ to show segment breaks visually
+    const segments = clean.split('\\')
+    segments.forEach((seg, si) => {
+      for (let ci = 0; ci < seg.length; ci++) {
+        const ch = seg[ci]
+        const absIdx = globalIdx
+        const span = charSpan.get(absIdx)
+
+        const chip = document.createElement('div')
+        chip.className = 'ws-ruby-chip'
+        chip.dataset.idx = String(absIdx)
+        if (span) {
+          chip.classList.add('has-ruby')
+          // Only show ruby label on the first char of the span
+          if (span.start === absIdx) {
+            chip.dataset.spanStart = 'true'
+            chip.dataset.spanEnd   = String(span.end - 1)
+            const rubyEl = document.createElement('span')
+            rubyEl.className = 'ws-ruby-chip-ruby'
+            rubyEl.textContent = span.ruby
+            chip.appendChild(rubyEl)
+          }
+        }
+        const mainEl = document.createElement('span')
+        mainEl.className = 'ws-ruby-chip-main'
+        mainEl.textContent = ch
+        chip.appendChild(mainEl)
+
+        chip.addEventListener('click', () => {
+          // If clicking a char that belongs to an existing span, select entire span
+          const targetSpan = charSpan.get(absIdx)
+          if (targetSpan && !selected.has(absIdx)) {
+            selected.clear()
+            for (let i = targetSpan.start; i < targetSpan.end; i++) selected.add(i)
+            rubyInput.value = targetSpan.ruby
+          } else if (selected.has(absIdx)) {
+            selected.delete(absIdx)
+          } else {
+            selected.add(absIdx)
+            rubyInput.value = ''
+          }
+          refreshSelection()
+        })
+
+        chipsContainer.appendChild(chip)
+        globalIdx++
+      }
+
+      // Show segment break between segments (not after last)
+      if (si < segments.length - 1) {
+        const sep = document.createElement('div')
+        sep.className = 'ws-ruby-chip-sep'
+        sep.textContent = '↵'
+        chipsContainer.appendChild(sep)
+        globalIdx++ // account for the '\\' char in clean text
+      }
+    })
+  }
+
+  function refreshSelection() {
+    chipsContainer.querySelectorAll<HTMLElement>('.ws-ruby-chip').forEach(chip => {
+      const idx = Number(chip.dataset.idx)
+      chip.classList.toggle('is-selected', selected.has(idx))
+    })
+    inputRow.hidden = selected.size === 0
+    if (selected.size > 0) rubyInput.focus()
+  }
+
+  function applyRuby() {
+    const ruby = rubyInput.value.trim()
+    if (selected.size === 0) return
+
+    const { clean, spans } = parseRuby(currentText)
+    const selArr = [...selected].sort((a, b) => a - b)
+    const selStart = selArr[0], selEnd = selArr[selArr.length - 1] + 1
+
+    // Remove any spans that overlap the selection
+    const filtered = spans.filter(s => s.end <= selStart || s.start >= selEnd)
+
+    // Add new span only if ruby text was provided
+    const newSpans = ruby.length > 0
+      ? [...filtered, { start: selStart, end: selEnd, ruby }]
+      : filtered
+
+    const newText = buildRubyText(clean, newSpans)
+    onChange(newText)
+    rebuild(newText)
+  }
+
+  confirmBtn.addEventListener('click', applyRuby)
+  rubyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); applyRuby() }
+    if (e.key === 'Escape') { selected.clear(); refreshSelection() }
+  })
+  cancelBtn.addEventListener('click', () => { selected.clear(); refreshSelection() })
+
+  rebuild(initialText)
+
+  // Expose update method so callers can sync when textarea changes
+  ;(section as unknown as { updateText: (t: string) => void }).updateText = rebuild
+
+  return section
 }
 
 function renderEditorEmpty(container: HTMLElement): void {
@@ -380,10 +567,24 @@ function renderEditor(
     callbacks.onResetPosition()
   })
 
+  // Ruby panel — only shown for vertical text (horizontal doesn't render ruby)
+  const rubyPanel = renderRubyPanel(bubble.translated_zh, (newText) => {
+    bubble.translated_zh = newText
+    zhTextarea.value = newText
+    callbacks.onTextChange('translated_zh', newText)
+  })
+  rubyPanel.style.display = bubble.text_direction === 'horizontal' ? 'none' : ''
+
+  // Keep ruby panel in sync when user edits textarea directly
+  zhTextarea.addEventListener('input', () => {
+    ;(rubyPanel as unknown as { updateText: (t: string) => void }).updateText(zhTextarea.value)
+  })
+
   editor.appendChild(jaLabel)
   editor.appendChild(jaTextarea)
   editor.appendChild(zhLabel)
   editor.appendChild(zhTextarea)
+  editor.appendChild(rubyPanel)
   editor.appendChild(fontSizeRow)
   editor.appendChild(rotationRow)
   editor.appendChild(dirLabel)

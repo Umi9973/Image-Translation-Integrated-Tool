@@ -619,6 +619,87 @@
 .ws-text-color-btn:hover { color: var(--text); border-color: var(--text-dim); }
 .ws-text-color-btn.ws-text-color-active { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 15%, transparent); }
 
+/* ── Ruby annotation panel ───────────────────────────────────────────── */
+
+.ws-ruby-section {
+  margin-bottom: 8px;
+}
+
+.ws-ruby-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 0;
+}
+
+.ws-ruby-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  cursor: pointer;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  padding: 2px 4px;
+  min-width: 22px;
+  background: var(--surface);
+  user-select: none;
+  transition: background 0.1s, border-color 0.1s;
+}
+.ws-ruby-chip:hover { background: var(--bg); border-color: var(--accent); }
+.ws-ruby-chip.is-selected { background: rgba(124,92,252,0.18); border-color: var(--accent); }
+.ws-ruby-chip.has-ruby { border-color: #0af; background: rgba(0,170,255,0.08); }
+.ws-ruby-chip.has-ruby.is-selected { background: rgba(0,170,255,0.22); }
+
+.ws-ruby-chip-ruby {
+  font-size: 9px;
+  color: #0af;
+  line-height: 1;
+  max-width: 40px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-ruby-chip-main {
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.ws-ruby-chip-sep {
+  display: flex;
+  align-items: center;
+  padding: 2px 2px;
+  font-size: 10px;
+  color: var(--muted, #888);
+  cursor: default;
+  align-self: center;
+}
+
+.ws-ruby-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+.ws-ruby-input {
+  flex: 1;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: inherit;
+  font-size: 12px;
+}
+.ws-ruby-confirm, .ws-ruby-cancel {
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: 12px;
+}
+.ws-ruby-confirm:hover { background: var(--accent); color: #fff; }
+.ws-ruby-cancel:hover  { background: #e53e3e; color: #fff; }
+
 /* ── Cover section (editor panel) ────────────────────────────────────── */
 
 .ws-cover-section {

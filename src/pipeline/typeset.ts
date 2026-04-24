@@ -155,9 +155,9 @@ const RUBY_GAP           = 2    // px gap between main column right edge and rub
 // ruby = small annotation rendered beside the main span.
 // Malformed patterns (no |, empty sides) pass through as literal text.
 
-interface RubySpan { start: number; end: number; ruby: string }
+export interface RubySpan { start: number; end: number; ruby: string }
 
-function parseRuby(text: string): { clean: string; spans: RubySpan[] } {
+export function parseRuby(text: string): { clean: string; spans: RubySpan[] } {
   const spans: RubySpan[] = []
   let clean = ''
   let i = 0
