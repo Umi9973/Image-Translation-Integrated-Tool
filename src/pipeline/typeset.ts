@@ -146,6 +146,40 @@ const MAX_FONT           = 72
 const DOT_RADIUS_FACTOR  = 0.12  // dot radius = fontSize × this
 const DOT_STRIDE_FACTOR  = 0.50  // vertical step between dot centres = fontSize × this
 const MIN_FONT           = 8
+const RUBY_FONT_RATIO    = 0.5   // ruby font size = 50% of main font
+const RUBY_GAP           = 2    // px gap between main column right edge and ruby column left edge
+
+// ── Ruby text parser ──────────────────────────────────────────────────────────
+// Syntax: {main|ruby} in translated_zh.
+// main = one or more characters at normal size.
+// ruby = small annotation rendered beside the main span.
+// Malformed patterns (no |, empty sides) pass through as literal text.
+
+interface RubySpan { start: number; end: number; ruby: string }
+
+function parseRuby(text: string): { clean: string; spans: RubySpan[] } {
+  const spans: RubySpan[] = []
+  let clean = ''
+  let i = 0
+  while (i < text.length) {
+    if (text[i] === '{') {
+      const close = text.indexOf('}', i)
+      const pipe  = text.indexOf('|', i + 1)
+      if (close > i && pipe > i && pipe < close) {
+        const main = text.slice(i + 1, pipe)
+        const ruby = text.slice(pipe + 1, close)
+        if (main.length > 0 && ruby.length > 0) {
+          spans.push({ start: clean.length, end: clean.length + main.length, ruby })
+          clean += main
+          i = close + 1
+          continue
+        }
+      }
+    }
+    clean += text[i++]
+  }
+  return { clean, spans }
+}
 
 // Title/honorific words that must not start a new column.
 // When BudouX splits "名前先生" → ["名前", "先生"], merge them back so the
@@ -467,7 +501,8 @@ export function renderTypesetToCanvas(
 
     // ── Horizontal text path ─────────────────────────────────────────────────
     if (bubble.text_direction === 'horizontal') {
-      const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
+      // Strip ruby syntax — horizontal layout doesn't render ruby annotations
+      const lines = raw.split('\\').map(l => parseRuby(l.trim()).clean).filter(Boolean)
       const innerW = bw - PADDING * 2
       const innerH = bh - PADDING * 2
       const override = bubble.font_size_override
@@ -526,10 +561,14 @@ export function renderTypesetToCanvas(
     const segments = splitSegments(raw)
     if (segments.length === 0) continue
 
-    const segChunks = segments.map(seg => {
+    // Parse ruby annotations per segment BEFORE BudouX so we get clean text for layout
+    const segRuby  = segments.map(seg => parseRuby(seg))
+    const segChunks = segRuby.map(({ clean: seg }) => {
       const normalized = normalizeVertical(seg)
       return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
     })
+    const allSpans = segRuby.flatMap(r => r.spans)
+    const hasRuby  = allSpans.length > 0
 
     const override = bubble.font_size_override
     let { fontSize, segColumns, truncated: trunc0 } = fitVertical(segChunks, bw, bh, false, override, hintFontSize)
@@ -537,7 +576,10 @@ export function renderTypesetToCanvas(
     if (alt.fontSize > fontSize || (alt.fontSize === fontSize && !alt.truncated && trunc0)) {
       ;({ fontSize, segColumns } = alt)
     }
-    const colStride = fontSize + COL_GAP
+    const rubyFontSize = fontSize * RUBY_FONT_RATIO
+    const colStride = hasRuby
+      ? fontSize + rubyFontSize + RUBY_GAP * 2 + COL_GAP
+      : fontSize + COL_GAP
 
     const numCols   = segColumns.reduce((s, cols) => s + cols.length, 0)
     const totalW    = numCols * fontSize + Math.max(0, numCols - 1) * COL_GAP
@@ -548,6 +590,25 @@ export function renderTypesetToCanvas(
     const rightColCenterX = blockLeft + totalW - fontSize / 2 + offX
     const textH = maxColumnHeight(segColumns, fontSize)
     const topY  = Math.max(by + PADDING, by + (bh - textH) / 2) + offY
+
+    // Build ruby map: "si:ci:chi" → { ruby, spanLen } for the start char of each ruby span.
+    // We scan segColumns[si] character-by-character to map charPos → column location.
+    const rubyMap = new Map<string, { ruby: string; spanLen: number }>()
+    if (hasRuby) {
+      for (let si = 0; si < segColumns.length; si++) {
+        const spans = segRuby[si].spans
+        if (spans.length === 0) continue
+        let charPos = 0
+        const cols = segColumns[si]
+        for (let ci = 0; ci < cols.length; ci++) {
+          for (let chi = 0; chi < cols[ci].length; chi++) {
+            const span = spans.find(s => s.start === charPos)
+            if (span) rubyMap.set(`${si}:${ci}:${chi}`, { ruby: span.ruby, spanLen: span.end - span.start })
+            charPos++
+          }
+        }
+      }
+    }
 
     if (bubble.cover) {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
@@ -591,12 +652,15 @@ export function renderTypesetToCanvas(
     const ROTATE_CHARS = new Set(['－', '—', '–', '―', '─'])
 
     let colIdx = 0
-    for (const cols of segColumns) {
-      for (const colText of cols) {
+    for (let si = 0; si < segColumns.length; si++) {
+      const cols = segColumns[si]
+      for (let ci = 0; ci < cols.length; ci++) {
+        const colText = cols[ci]
         const x = rightColCenterX - colIdx * colStride
 
         let y = topY
-        for (const ch of colText) {
+        for (let chi = 0; chi < colText.length; chi++) {
+          const ch = colText[chi]
           const cx = x
 
           if (ch === '・') {
@@ -635,6 +699,32 @@ export function renderTypesetToCanvas(
             ctx.fillStyle = vFill
             ctx.fillText(ch, cx, y)
             y += fontSize
+          }
+
+          // Ruby: render small vertical text to the right of the main column
+          const rubyInfo = rubyMap.get(`${si}:${ci}:${chi}`)
+          if (rubyInfo) {
+            const rx      = x + fontSize / 2 + RUBY_GAP + rubyFontSize / 2
+            const spanH   = rubyInfo.spanLen * fontSize
+            const rubyH   = rubyInfo.ruby.length * rubyFontSize
+            const rubyTop = (y - fontSize) + spanH / 2 - rubyH / 2
+            ctx.save()
+            ctx.font      = `${rubyFontSize}px ${FONT_FAMILY}`
+            ctx.textBaseline = 'top'
+            ctx.textAlign    = 'center'
+            const rStrokeW = Math.max(0.5, rubyFontSize * 0.14)
+            ctx.strokeStyle = vStroke
+            ctx.lineWidth   = rStrokeW * 2
+            ctx.lineJoin    = 'round'
+            // Canvas lacks writing-mode; render ruby chars top-to-bottom manually
+            for (let ri = 0; ri < rubyInfo.ruby.length; ri++) {
+              const ry = rubyTop + ri * rubyFontSize
+              ctx.strokeText(rubyInfo.ruby[ri], rx, ry)
+              ctx.fillStyle = vFill
+              ctx.fillText(rubyInfo.ruby[ri], rx, ry)
+            }
+            ctx.restore()
+            ctx.font = `${fontSize}px ${FONT_FAMILY}`
           }
         }
 
@@ -703,7 +793,8 @@ export function renderTypeset(
 
     // ── Horizontal text path ─────────────────────────────────────────────────
     if (bubble.text_direction === 'horizontal') {
-      const lines = raw.split('\\').map(l => l.trim()).filter(Boolean)
+      // Strip ruby syntax — horizontal layout doesn't render ruby annotations
+      const lines = raw.split('\\').map(l => parseRuby(l.trim()).clean).filter(Boolean)
       const innerW = bw - PADDING * 2
       const innerH = bh - PADDING * 2
       const override = bubble.font_size_override
@@ -789,10 +880,14 @@ export function renderTypeset(
 
     // Parse each segment into BudouX chunks, then merge title words so
     // name+title (e.g. 奈良先生) stays in one column.
-    const segChunks = segments.map(seg => {
+    // Parse ruby annotations first so BudouX sees clean text only.
+    const segRubySvg  = segments.map(seg => parseRuby(seg))
+    const segChunks = segRubySvg.map(({ clean: seg }) => {
       const normalized = normalizeVertical(seg)
       return mergedots(mergeparticles(mergetitles(zhParser.parse(normalized))))
     })
+    const allSpansSvg = segRubySvg.flatMap(r => r.spans)
+    const hasRubySvg  = allSpansSvg.length > 0
 
     const override = bubble.font_size_override
     const initialFit = fitVertical(segChunks, bw, bh, false, override, hintFontSize)
@@ -802,7 +897,28 @@ export function renderTypeset(
     if (splitDotsApplied) ({ fontSize, segColumns, truncated } = altFit)
     fontSizes[bubble.id] = fontSize
     if (truncated) clippedIds.push(bubble.id)
-    const colStride = fontSize + COL_GAP
+    const rubyFontSizeSvg = fontSize * RUBY_FONT_RATIO
+    const colStride = hasRubySvg
+      ? fontSize + rubyFontSizeSvg + RUBY_GAP * 2 + COL_GAP
+      : fontSize + COL_GAP
+
+    // Build ruby map for SVG renderer
+    const rubyMapSvg = new Map<string, { ruby: string; spanLen: number }>()
+    if (hasRubySvg) {
+      for (let si = 0; si < segColumns.length; si++) {
+        const spans = segRubySvg[si].spans
+        if (spans.length === 0) continue
+        let charPos = 0
+        const cols = segColumns[si]
+        for (let ci = 0; ci < cols.length; ci++) {
+          for (let chi = 0; chi < cols[ci].length; chi++) {
+            const span = spans.find(s => s.start === charPos)
+            if (span) rubyMapSvg.set(`${si}:${ci}:${chi}`, { ruby: span.ruby, spanLen: span.end - span.start })
+            charPos++
+          }
+        }
+      }
+    }
 
     const numCols = segColumns.reduce((s, cols) => s + cols.length, 0)
     const totalW    = numCols * fontSize + Math.max(0, numCols - 1) * COL_GAP
@@ -886,8 +1002,10 @@ export function renderTypeset(
     const dotStride = fontSize * DOT_STRIDE_FACTOR
 
     let colIdx = 0
-    for (const cols of segColumns) {
-      for (const colText of cols) {
+    for (let si = 0; si < segColumns.length; si++) {
+      const cols = segColumns[si]
+      for (let ci = 0; ci < cols.length; ci++) {
+        const colText = cols[ci]
         const x = rightColCenterX - colIdx * colStride
 
         let y        = topY
@@ -906,7 +1024,8 @@ export function renderTypeset(
           textSeg = ''
         }
 
-        for (const ch of colText) {
+        for (let chi = 0; chi < colText.length; chi++) {
+          const ch = colText[chi]
           if (ch === '・') {
             flushText()
             const circle = document.createElementNS(ns, 'circle')
@@ -919,6 +1038,26 @@ export function renderTypeset(
           } else {
             textSeg += ch
             y       += fontSize
+          }
+
+          // Ruby: flush main text first, then emit small vertical text to the right
+          const rubyInfo = rubyMapSvg.get(`${si}:${ci}:${chi}`)
+          if (rubyInfo) {
+            flushText()
+            const rx      = x + fontSize / 2 + RUBY_GAP + rubyFontSizeSvg / 2
+            const spanH   = rubyInfo.spanLen * fontSize
+            // Center ruby vertically over the span; (y - fontSize) = top of current char
+            const rubyTop = (y - fontSize) + spanH / 2 - (rubyInfo.ruby.length * rubyFontSizeSvg) / 2
+            const rt = document.createElementNS(ns, 'text')
+            rt.setAttribute('x',            String(rx))
+            rt.setAttribute('y',            String(rubyTop))
+            rt.setAttribute('writing-mode', 'vertical-rl')
+            rt.setAttribute('text-anchor',  'start')
+            rt.setAttribute('font-size',    String(rubyFontSizeSvg))
+            rt.setAttribute('stroke-width', String(Math.max(0.5, rubyFontSizeSvg * 0.14)))
+            rt.textContent = rubyInfo.ruby
+            g.appendChild(rt)
+            textSegY = y  // resume main text flush from current y
           }
         }
         flushText()
