@@ -739,7 +739,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   topbar.className = 'ws-topbar'
   topbar.innerHTML = `
     <span class="ws-topbar-brand">Kalar</span>
-    <span class="ws-topbar-filename">${escapeHtml(page.filename)}</span>
+    <span style="flex:1"></span>
     <button type="button" class="ws-settings-btn">⚙ Settings</button>
     <button type="button" class="ws-new-btn">← New Page</button>
   `
@@ -760,11 +760,89 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   content.className = 'ws-content'
   root.appendChild(content)
 
+  // Declared early — assigned in Add Bubble section below, used in lasso event handlers
+  let lassoBtn!: HTMLButtonElement
+
   // Left: dictionary panel
   const dictPanel = document.createElement('div')
   dictPanel.className = 'ws-dict-panel'
   content.appendChild(dictPanel)
   renderDictPanel(dictPanel)
+
+  // Add Bubble section (bottom of left sidebar)
+  const addBubbleSection = document.createElement('div')
+  addBubbleSection.className = 'ws-add-bubble-section'
+
+  const addBubbleRow = document.createElement('div')
+  addBubbleRow.className = 'ws-add-bubble-row'
+
+  const addBoxBtn = document.createElement('button')
+  addBoxBtn.type = 'button'
+  addBoxBtn.className = 'ws-add-bubble-btn'
+  addBoxBtn.textContent = 'Add Box/Round/Freehand'
+
+  const addBubbleWrapper = document.createElement('div')
+  addBubbleWrapper.className = 'ws-add-bubble-wrapper'
+
+  const modePill = document.createElement('button')
+  modePill.type = 'button'
+  modePill.className = 'ws-add-bubble-pill'
+  modePill.innerHTML = '<span class="ws-pill-label">Box</span><span class="ws-pill-arrow">▾</span>'
+
+  const addBubbleDropdown = document.createElement('div')
+  addBubbleDropdown.className = 'ws-add-bubble-dropdown'
+  addBubbleDropdown.hidden = true
+
+  const dropdownItems: { icon: string; iconColor: string; label: string; action: () => void }[] = [
+    { icon: '▭', iconColor: '#63b3ed', label: 'Box',      action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'rect') } },
+    { icon: '◯', iconColor: '#68d391', label: 'Round',    action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'bubble') } },
+    { icon: '✏', iconColor: '#f6ad55', label: 'Freehand', action: () => {
+      lassoMode = true
+      lassoBtn.classList.add('is-active')
+      svg.style.cursor = 'crosshair'
+      svg.style.pointerEvents = 'all'
+    }},
+  ]
+
+  let currentMode = dropdownItems[0]
+
+  for (const item of dropdownItems) {
+    const opt = document.createElement('button')
+    opt.type = 'button'
+    opt.className = 'ws-add-bubble-option'
+    const iconSpan = document.createElement('span')
+    iconSpan.textContent = item.icon
+    iconSpan.style.color = item.iconColor
+    iconSpan.style.fontSize = '1rem'
+    opt.appendChild(iconSpan)
+    opt.appendChild(document.createTextNode(item.label))
+    opt.addEventListener('click', () => {
+      currentMode = item
+      modePill.querySelector<HTMLSpanElement>('.ws-pill-label')!.textContent = item.label
+      addBubbleDropdown.hidden = true
+    })
+    addBubbleDropdown.appendChild(opt)
+  }
+
+  addBoxBtn.addEventListener('click', () => { currentMode.action() })
+
+  modePill.addEventListener('click', (e) => {
+    e.stopPropagation()
+    addBubbleDropdown.hidden = !addBubbleDropdown.hidden
+  })
+
+  document.addEventListener('click', () => { addBubbleDropdown.hidden = true })
+
+  // lassoBtn kept as a no-op handle so lasso exit logic still works
+  lassoBtn = document.createElement('button')
+  lassoBtn.hidden = true
+
+  addBubbleWrapper.appendChild(modePill)
+  addBubbleWrapper.appendChild(addBubbleDropdown)
+  addBubbleRow.appendChild(addBoxBtn)
+  addBubbleRow.appendChild(addBubbleWrapper)
+  addBubbleSection.appendChild(addBubbleRow)
+  dictPanel.appendChild(addBubbleSection)
 
   // Centre: image viewer
   const viewer = document.createElement('div')
@@ -823,14 +901,12 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   let dragState: DragState | null = null
 
   type BubbleShape = 'rect' | 'bubble'
-  let drawShape: BubbleShape = 'rect'
 
   // Lasso draw state
   let lassoMode = false
   let lassoDrawing = false
   let lassoPoints: { x: number; y: number }[] = []
   let lassoPreviewEl: SVGPolylineElement | null = null
-  let lassoBtn!: HTMLButtonElement  // assigned in controls section below
 
   const ac = new AbortController()
 
@@ -980,34 +1056,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   detectBtn.className = 'ws-detect-btn'
   detectBtn.textContent = 'Detect Bubbles'
   controls.appendChild(detectBtn)
-
-  const addBoxBtn = document.createElement('button')
-  addBoxBtn.type = 'button'
-  addBoxBtn.className = 'ws-add-box-btn'
-  addBoxBtn.textContent = '+ Add Box'
-  addBoxBtn.title = 'Add a new bubble at the center of the image'
-  controls.appendChild(addBoxBtn)
-
-  const shapeSelect = document.createElement('select')
-  shapeSelect.className = 'ws-shape-select'
-  shapeSelect.innerHTML = '<option value="rect">Rect</option><option value="bubble">Bubble</option>'
-  shapeSelect.title = 'Shape for new drawn bubbles'
-  shapeSelect.addEventListener('change', () => { drawShape = shapeSelect.value as BubbleShape })
-  controls.appendChild(shapeSelect)
-
-  lassoBtn = document.createElement('button')
-  lassoBtn.id = 'btn-lasso'
-  lassoBtn.type = 'button'
-  lassoBtn.className = 'ws-add-box-btn'
-  lassoBtn.textContent = '✏ Lasso'
-  lassoBtn.title = 'Draw a freehand lasso shape over text'
-  lassoBtn.addEventListener('click', () => {
-    lassoMode = !lassoMode
-    lassoBtn.classList.toggle('active', lassoMode)
-    svg.style.cursor = lassoMode ? 'crosshair' : ''
-    svg.style.pointerEvents = lassoMode ? 'all' : ''
-  })
-  controls.appendChild(lassoBtn)
 
   const ocrBtn = document.createElement('button')
   ocrBtn.type = 'button'
@@ -1488,10 +1536,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     inpaintBtn.disabled = false
     selectBubble(bubble.id)
   }
-
-  addBoxBtn.addEventListener('click', () => {
-    addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, drawShape)
-  })
 
   // ── Translate button state helper ─────────────────────────────────────────
 

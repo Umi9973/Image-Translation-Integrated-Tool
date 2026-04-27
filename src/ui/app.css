@@ -31,10 +31,10 @@ body {
 }
 
 .logo {
-  font-size: 1.2rem;
-  font-weight: 700;
-  color: var(--accent);
-  letter-spacing: 0.5px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #38b2ac;
+  letter-spacing: 0.04em;
 }
 
 .tagline {
