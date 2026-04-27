@@ -23,9 +23,6 @@ const STATE_LABELS: Record<BubbleState, string> = {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
 
 function truncate(str: string, max: number): string {
   return str.length <= max ? str : str.slice(0, max) + '…'
