@@ -90,6 +90,7 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 /* ── Image viewer (left) ──────────────────────────────────────────────── */
@@ -170,8 +171,6 @@
   cursor: move;
 }
 
-/* Lasso button active state */
-#btn-lasso.active { background-color: #0af; color: #000; outline: 2px solid #007acc; }
 
 /* Lasso preview polyline while drawing */
 .lasso-preview {
@@ -184,6 +183,20 @@
 
 /* Freehand polygon bubble overlay */
 .bubble-polygon { cursor: move; }
+
+/* Draft freehand polyline — incomplete lasso shape */
+.bubble-draft {
+  fill: none;
+  stroke: #f6c860;
+  stroke-width: 0.6;
+  stroke-dasharray: 2 1.2;
+  cursor: pointer;
+  opacity: 0.8;
+}
+.bubble-draft.is-selected {
+  stroke: #ed8936;
+  opacity: 1;
+}
 
 .ws-handle-sq {
   fill: #fff;
@@ -463,6 +476,7 @@
 .ws-badge--ocr_done   { background: #1a365d; color: #63b3ed; }
 .ws-badge--translated { background: #1c4532; color: #68d391; }
 .ws-badge--reviewed   { background: #3c2800; color: #f6ad55; }
+.ws-badge--draft      { background: #2d2218; color: #f6c860; }
 
 /* ── Bubble editor ────────────────────────────────────────────────────── */
 
@@ -482,6 +496,42 @@
   font-size: 0.8125rem;
   text-align: center;
 }
+
+.ws-draft-hint {
+  padding: 10px 14px 6px;
+  color: #f6c860;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  border-top: 2px solid #3a2e00;
+}
+
+.ws-continue-lasso-btn,
+.ws-finish-draft-btn {
+  margin: 4px 14px 2px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  width: calc(100% - 28px);
+  text-align: center;
+  transition: background 0.1s;
+  display: block;
+}
+
+.ws-continue-lasso-btn {
+  background: rgba(246, 200, 96, 0.12);
+  border: 1px solid #f6c860;
+  color: #f6c860;
+}
+.ws-continue-lasso-btn:hover { background: rgba(246, 200, 96, 0.25); }
+
+.ws-finish-draft-btn {
+  margin-bottom: 10px;
+  background: rgba(124, 92, 252, 0.12);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.ws-finish-draft-btn:hover { background: rgba(124, 92, 252, 0.25); }
 
 .ws-editor-label {
   font-size: 0.6875rem;
@@ -621,6 +671,64 @@
   font-size: 0.75rem;
   color: var(--text-dim);
   font-style: italic;
+}
+
+/* ── Inpaint color popup ──────────────────────────────────────────── */
+
+.ws-inpaint-color-popup[hidden] { display: none; }
+
+.ws-inpaint-color-popup {
+  position: absolute;
+  z-index: 20;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  width: 112px;
+  pointer-events: all;
+}
+
+.ws-inpaint-color-title {
+  font-size: 0.69rem;
+  color: var(--text-dim);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.ws-inpaint-color-btns {
+  display: flex;
+  gap: 5px;
+}
+
+.ws-inpaint-color-btn {
+  flex: 1;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.1s, box-shadow 0.1s;
+}
+.ws-inpaint-color-btn:hover { border-color: var(--text-dim); }
+.ws-inpaint-color-btn.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.ws-inpaint-swatch {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
+  display: block;
 }
 
 .ws-text-color-btn {

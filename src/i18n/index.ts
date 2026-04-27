@@ -53,6 +53,12 @@ const STRINGS = {
   stateOcrDone:       { en: 'ocr done',           zh: '已识别' },
   stateTranslated:    { en: 'translated',         zh: '已翻译' },
   stateReviewed:      { en: 'reviewed',           zh: '已审校' },
+  stateDraft:         { en: 'draft',              zh: '草稿' },
+
+  // Draft lasso
+  draftHint:          { en: 'Incomplete freehand shape — continue drawing or finish.', zh: '未完成的自由形 — 继续绘制或完成。' },
+  continueLasso:      { en: 'Continue Drawing',   zh: '继续绘制' },
+  finishDraft:        { en: 'Finish Shape',        zh: '完成形状' },
 
   // Add bubble section
   addBubbleBtn:       { en: 'Add Box/Round/Freehand', zh: '添加方/圆/自由形' },
@@ -70,6 +76,9 @@ const STRINGS = {
   dictResetAll:       { en: 'Reset all',          zh: '全部重置' },
   dictEmptySeg:       { en: 'No entries — add phrases\nBudouX will not split', zh: '暂无条目 — 添加短语\nBudouX 不会将其拆分' },
   dictEmptyGlossary:  { en: 'No entries — add JP→ZH\nterm overrides for the LLM', zh: '暂无条目 — 添加日文→中文\n大语言模型 翻译时会自动转换' },
+
+  // Inpaint color popup
+  inpaintColorLabel:  { en: 'Inpaint Color',  zh: '修复颜色' },
 
   // Settings modal
   settingsTitle:      { en: 'Settings',           zh: '设置' },

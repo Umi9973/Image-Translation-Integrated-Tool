@@ -601,8 +601,10 @@ async function processAll(
       const g = parseInt(hex.slice(2, 4), 16)
       const bv = parseInt(hex.slice(4, 6), 16)
       solidColors.set(i, { r, g, b: bv, dilation: 3 })
-      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: 'solid', color_override: b.inpaint_color, fill_rgb: [parseInt(b.inpaint_color.slice(1,3),16), parseInt(b.inpaint_color.slice(3,5),16), parseInt(b.inpaint_color.slice(5,7),16)], rect_pct: b.rect })
-      return 'solid'
+      // bubble/freehand shapes must use the shape-aware white route for correct fill geometry
+      const shapeRoute: Route = (b.shape === 'bubble' || b.shape === 'freehand') ? 'white' : 'solid'
+      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, is_background: b.is_background, route: shapeRoute, color_override: b.inpaint_color, fill_rgb: [r, g, bv], rect_pct: b.rect })
+      return shapeRoute
     }
     if (b.is_background === true) {
       // User-forced background route: sample color and fill solid, skip auto-detect
@@ -790,9 +792,10 @@ async function processAll(
         edgeDbg.push({ edge: edgeNames[ei], accepted: edgeAccepted, rejected_short: edgeRejectedShort, rejected_var: edgeRejectedVar })
       }
       const fallback = isLight ? 255 : 0
-      const fr = rN >= 16 ? Math.round(rR / rN) : fallback
-      const fg = rN >= 16 ? Math.round(rG / rN) : fallback
-      const fb = rN >= 16 ? Math.round(rB / rN) : fallback
+      const colorOverride = solidColors.get(i)
+      const fr = colorOverride ? colorOverride.r : (rN >= 16 ? Math.round(rR / rN) : fallback)
+      const fg = colorOverride ? colorOverride.g : (rN >= 16 ? Math.round(rG / rN) : fallback)
+      const fb = colorOverride ? colorOverride.b : (rN >= 16 ? Math.round(rB / rN) : fallback)
 
       // For freehand shape: rasterize the polygon into a bitmask first, then use O(1) lookup.
       // For bubble shape: fill full bubble interior oval (bx..bx2).

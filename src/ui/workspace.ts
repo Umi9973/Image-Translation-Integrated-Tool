@@ -38,6 +38,13 @@ function makeBadge(state: BubbleState, extraClass = ''): HTMLSpanElement {
   return el
 }
 
+function makeDraftBadge(extraClass = ''): HTMLSpanElement {
+  const el = document.createElement('span')
+  el.className = `ws-badge ws-badge--draft${extraClass ? ' ' + extraClass : ''}`
+  el.textContent = t('stateDraft')
+  return el
+}
+
 function sortBubbleIds(bubbles: MangaBubble[]): string[] {
   return [...bubbles]
     .sort((a, b) => {
@@ -95,6 +102,8 @@ interface EditorCallbacks {
   onIsBackgroundChange: (val: boolean) => void
   onTextColorChange: (color: 'black' | 'white') => void
   onRotationChange: (deg: number | undefined) => void
+  onContinueLasso?: () => void
+  onFinishDraft?: () => void
 }
 
 // ── Ruby panel ────────────────────────────────────────────────────────────────
@@ -300,6 +309,61 @@ function renderEditor(
   computedFontSize?: number,
 ): void {
   container.innerHTML = ''
+
+  // Draft bubble: incomplete freehand — show minimal UI with continue/delete hint
+  if (bubble.is_draft) {
+    const editor = document.createElement('div')
+    editor.className = 'ws-editor'
+
+    const nav = document.createElement('div')
+    nav.className = 'ws-editor-nav'
+    const prevBtn = document.createElement('button')
+    prevBtn.type = 'button'
+    prevBtn.className = 'ws-nav-btn'
+    prevBtn.textContent = t('prevBtn')
+    prevBtn.disabled = idx === 0
+    prevBtn.addEventListener('click', () => callbacks.onNavigate(-1))
+    const pos = document.createElement('span')
+    pos.className = 'ws-editor-pos'
+    pos.textContent = `#${idx + 1} / ${total}`
+    const nextBtn = document.createElement('button')
+    nextBtn.type = 'button'
+    nextBtn.className = 'ws-nav-btn'
+    nextBtn.textContent = t('nextBtn')
+    nextBtn.disabled = idx === total - 1
+    nextBtn.addEventListener('click', () => callbacks.onNavigate(1))
+    nav.appendChild(prevBtn)
+    nav.appendChild(pos)
+    nav.appendChild(nextBtn)
+
+    const hint = document.createElement('div')
+    hint.className = 'ws-draft-hint'
+    hint.textContent = t('draftHint')
+
+    const continueBtn = document.createElement('button')
+    continueBtn.type = 'button'
+    continueBtn.className = 'ws-continue-lasso-btn'
+    continueBtn.textContent = t('continueLasso')
+    if (callbacks.onContinueLasso) {
+      continueBtn.addEventListener('click', () => callbacks.onContinueLasso!())
+    }
+
+    const finishBtn = document.createElement('button')
+    finishBtn.type = 'button'
+    finishBtn.className = 'ws-finish-draft-btn'
+    finishBtn.textContent = t('finishDraft')
+    if (callbacks.onFinishDraft) {
+      finishBtn.addEventListener('click', () => callbacks.onFinishDraft!())
+    }
+
+    editor.appendChild(nav)
+    editor.appendChild(hint)
+    editor.appendChild(continueBtn)
+    editor.appendChild(finishBtn)
+    container.appendChild(editor)
+    return
+  }
+
   const locked = bubble.is_locked
   const editor = document.createElement('div')
   editor.className = 'ws-editor'
@@ -629,9 +693,9 @@ function rebuildBubbleList(
     const preview = document.createElement('span')
     preview.className = 'ws-bubble-preview'
     preview.dataset.preview = id
-    preview.textContent = truncate(bubble.raw_ja || '(no OCR)', 18)
+    preview.textContent = bubble.is_draft ? '(draft)' : truncate(bubble.raw_ja || '(no OCR)', 18)
 
-    const badge = makeBadge(bubble.state)
+    const badge = bubble.is_draft ? makeDraftBadge() : makeBadge(bubble.state)
     badge.dataset.badge = id
 
     const delBtn = document.createElement('button')
@@ -685,7 +749,16 @@ function rebuildSvgOverlay(
   while (svg.firstChild) svg.removeChild(svg.firstChild)
 
   bubbles.forEach(bubble => {
-    if (bubble.shape === 'freehand' && bubble.points && bubble.points.length >= 3) {
+    if (bubble.is_draft && bubble.points && bubble.points.length >= 2) {
+      const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+      poly.setAttribute('points', bubble.points.map(p => `${p.x},${p.y}`).join(' '))
+      poly.setAttribute('vector-effect', 'non-scaling-stroke')
+      poly.setAttribute('pointer-events', 'stroke')
+      poly.classList.add('bubble-draft')
+      poly.dataset.id = bubble.id
+      poly.addEventListener('click', () => mousedownFn(bubble.id, new MouseEvent('mousedown')))
+      svg.appendChild(poly)
+    } else if (bubble.shape === 'freehand' && bubble.points && bubble.points.length >= 3) {
       const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
       poly.setAttribute('points', bubble.points.map(p => `${p.x},${p.y}`).join(' '))
       poly.setAttribute('vector-effect', 'non-scaling-stroke')
@@ -930,6 +1003,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   let lassoDrawing = false
   let lassoPoints: { x: number; y: number }[] = []
   let lassoPreviewEl: SVGPolylineElement | null = null
+  let lassoResumeBubbleId: string | null = null  // id of draft bubble being resumed
 
   const ac = new AbortController()
 
@@ -1304,6 +1378,97 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   panel.appendChild(editorContainer)
   renderEditorEmpty(editorContainer)
 
+  // ── Inpaint color popup ────────────────────────────────────────────────────
+
+  const inpaintPopup = document.createElement('div')
+  inpaintPopup.className = 'ws-inpaint-color-popup'
+  inpaintPopup.hidden = true
+  content.appendChild(inpaintPopup)
+
+  const inpaintPopupTitle = document.createElement('div')
+  inpaintPopupTitle.className = 'ws-inpaint-color-title'
+  inpaintPopupTitle.dataset.i18n = 'inpaintColorLabel'
+  inpaintPopupTitle.textContent = t('inpaintColorLabel')
+  inpaintPopup.appendChild(inpaintPopupTitle)
+
+  const inpaintColorBtnsRow = document.createElement('div')
+  inpaintColorBtnsRow.className = 'ws-inpaint-color-btns'
+  inpaintPopup.appendChild(inpaintColorBtnsRow)
+
+  const INPAINT_COLORS = [
+    { hex: '#111111', label: 'Black' },
+    { hex: '#888888', label: 'Grey'  },
+    { hex: '#ffffff', label: 'White' },
+  ] as const
+
+  const inpaintColorBtnMap = new Map<string, HTMLButtonElement>()
+
+  for (const opt of INPAINT_COLORS) {
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'ws-inpaint-color-btn'
+    btn.title = opt.label
+    const swatch = document.createElement('span')
+    swatch.className = 'ws-inpaint-swatch'
+    swatch.style.background = opt.hex
+    if (opt.hex === '#ffffff') swatch.style.border = '1px solid #555'
+    btn.appendChild(swatch)
+    btn.addEventListener('click', () => {
+      const bubble = bubbles.find(b => b.id === selectedId)
+      if (!bubble) return
+      if (bubble.inpaint_color_locked && bubble.inpaint_color === opt.hex) {
+        bubble.inpaint_color = undefined
+        bubble.inpaint_color_locked = false
+      } else {
+        bubble.inpaint_color = opt.hex
+        bubble.inpaint_color_locked = true
+      }
+      syncInpaintPopup()
+    })
+    inpaintColorBtnMap.set(opt.hex, btn)
+    inpaintColorBtnsRow.appendChild(btn)
+  }
+
+  function syncInpaintPopup(): void {
+    if (!selectedId) { inpaintPopup.hidden = true; return }
+    const bubble = bubbles.find(b => b.id === selectedId)
+    if (!bubble) { inpaintPopup.hidden = true; return }
+    for (const [hex, btn] of inpaintColorBtnMap) {
+      btn.classList.toggle('is-active', bubble.inpaint_color_locked === true && bubble.inpaint_color === hex)
+    }
+    positionInpaintPopup(bubble)
+    inpaintPopup.hidden = false
+  }
+
+  function positionInpaintPopup(bubble: MangaBubble): void {
+    const contentRect = content.getBoundingClientRect()
+    const frameRect   = imageFrame.getBoundingClientRect()
+    const POPUP_W = 112
+
+    const bubbleCenterXFrac = (bubble.rect.x + bubble.rect.w / 2) / 100
+    const bubbleCenterYFrac = (bubble.rect.y + bubble.rect.h / 2) / 100
+    const bubbleScreenY = frameRect.top + bubbleCenterYFrac * frameRect.height
+    const relY = bubbleScreenY - contentRect.top
+
+    const leftGap  = frameRect.left  - contentRect.left
+    const rightGap = contentRect.right - frameRect.right
+    const preferLeft = bubbleCenterXFrac < 0.5
+
+    let leftPos: number
+    if (preferLeft && leftGap >= POPUP_W + 12) {
+      leftPos = leftGap - POPUP_W - 8
+    } else if (!preferLeft && rightGap >= POPUP_W + 12) {
+      leftPos = frameRect.right - contentRect.left + 8
+    } else if (leftGap >= rightGap) {
+      leftPos = Math.max(4, leftGap - POPUP_W - 8)
+    } else {
+      leftPos = frameRect.right - contentRect.left + 8
+    }
+
+    inpaintPopup.style.left = `${leftPos}px`
+    inpaintPopup.style.top  = `${Math.max(8, Math.min(contentRect.height - 90, relY - 40))}px`
+  }
+
   // ── Selection logic ────────────────────────────────────────────────────────
 
   function selectBubble(id: string): void {
@@ -1321,7 +1486,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       ?.scrollIntoView({ block: 'nearest' })
 
     const bubble = bubbles.find(b => b.id === id)!
-    renderHandles(bubble)
+    if (!bubble.is_draft) renderHandles(bubble)
+    else clearHandles()
     const idx = sortedIds.indexOf(id)
 
     renderEditor(editorContainer, bubble, idx, sortedIds.length, {
@@ -1374,7 +1540,10 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onIsBackgroundChange(val) { bubble.is_background = val },
       onTextColorChange(color) { bubble.text_color = color },
       onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
+      onContinueLasso: bubble.is_draft ? () => resumeLasso(bubble) : undefined,
+      onFinishDraft: bubble.is_draft ? () => finishDraft(id) : undefined,
     }, computedFontSizes[id])
+    syncInpaintPopup()
   }
 
   // ── Delete bubble ──────────────────────────────────────────────────────────
@@ -1383,6 +1552,15 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     const deletedIdx = sortedIds.indexOf(id)
     bubbles = bubbles.filter(b => b.id !== id)
     sortedIds = sortedIds.filter(sid => sid !== id)
+
+    // If deleting the draft being resumed, cancel lasso mode
+    if (lassoResumeBubbleId === id) {
+      lassoResumeBubbleId = null
+      lassoPoints = []
+      lassoPreviewEl?.remove()
+      lassoPreviewEl = null
+      if (lassoMode) exitLassoMode()
+    }
 
     // Remove from SVG overlay
     svg.querySelector(`[data-id="${id}"]`)?.remove()
@@ -1404,6 +1582,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       } else {
         clearHandles()
         renderEditorEmpty(editorContainer)
+        inpaintPopup.hidden = true
       }
     }
 
@@ -1425,11 +1604,21 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   function startLassoDraw(e: MouseEvent): void {
     lassoDrawing = true
-    lassoPoints = [clientToSvgPct(e)]
-    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
-    poly.classList.add('lasso-preview')
-    svg.appendChild(poly)
-    lassoPreviewEl = poly
+    if (lassoResumeBubbleId && lassoPoints.length > 0) {
+      // Resuming a draft: append new point to existing path
+      lassoPoints.push(clientToSvgPct(e))
+      if (lassoPreviewEl) {
+        lassoPreviewEl.setAttribute('points', lassoPoints.map(p => `${p.x},${p.y}`).join(' '))
+      }
+    } else {
+      // Fresh draw
+      lassoResumeBubbleId = null
+      lassoPoints = [clientToSvgPct(e)]
+      const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+      poly.classList.add('lasso-preview')
+      svg.appendChild(poly)
+      lassoPreviewEl = poly
+    }
   }
 
   function continueLassoDraw(e: MouseEvent): void {
@@ -1444,38 +1633,15 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     }
   }
 
-  function finishLassoDraw(): void {
-    lassoDrawing = false
-    lassoPreviewEl?.remove()
-    lassoPreviewEl = null
+  function exitLassoMode(): void {
+    lassoMode = false
+    lassoBtn.classList.remove('is-active')
+    svg.style.cursor = ''
+    svg.style.pointerEvents = ''
+  }
 
-    const pts = lassoPoints
-    lassoPoints = []
-
-    if (pts.length < 3) return  // not enough points
-
-    const xs = pts.map(p => p.x), ys = pts.map(p => p.y)
-    const minX = Math.min(...xs), maxX = Math.max(...xs)
-    const minY = Math.min(...ys), maxY = Math.max(...ys)
-    if (maxX - minX < 2 || maxY - minY < 2) return  // bounding box too small
-
-    const rect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
-    const bubble: MangaBubble = {
-      id: crypto.randomUUID(),
-      rect,
-      points: pts,
-      raw_ja: '',
-      translated_zh: '',
-      state: 'detected',
-      is_locked: false,
-      layer_z: 0,
-      source: 'manual',
-      shape: 'freehand',
-      cover: true,
-    }
-    bubbles.push(bubble)
-    sortedIds = sortBubbleIds(bubbles)
-
+  function addFreehandPolygon(bubble: MangaBubble): void {
+    const pts = bubble.points!
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon')
     poly.setAttribute('points', pts.map(p => `${p.x},${p.y}`).join(' '))
     poly.setAttribute('vector-effect', 'non-scaling-stroke')
@@ -1494,18 +1660,125 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       }
     })
     svg.appendChild(poly)
+  }
 
+  function addDraftPolygon(bubble: MangaBubble): void {
+    if (!bubble.points || bubble.points.length < 2) return
+    const pts = bubble.points
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+    poly.setAttribute('points', pts.map(p => `${p.x},${p.y}`).join(' '))
+    poly.setAttribute('vector-effect', 'non-scaling-stroke')
+    poly.setAttribute('pointer-events', 'stroke')
+    poly.classList.add('bubble-draft')
+    poly.dataset.id = bubble.id
+    poly.addEventListener('click', () => selectBubble(bubble.id))
+    svg.appendChild(poly)
+  }
+
+  function saveDraft(pts: { x: number; y: number }[], resumeId: string | null): void {
+    if (resumeId) {
+      // Update existing draft bubble's points
+      const existing = bubbles.find(b => b.id === resumeId)
+      if (existing) {
+        existing.points = pts
+        const el = svg.querySelector<SVGPolylineElement>(`[data-id="${resumeId}"]`)
+        if (el) el.setAttribute('points', pts.map(p => `${p.x},${p.y}`).join(' '))
+        rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
+        selectBubble(resumeId)
+        return
+      }
+    }
+
+    // Compute tight bbox for rect
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y)
+    const rect = {
+      x: Math.min(...xs), y: Math.min(...ys),
+      w: Math.max(...xs) - Math.min(...xs),
+      h: Math.max(...ys) - Math.min(...ys),
+    }
+    const bubble: MangaBubble = {
+      id: crypto.randomUUID(),
+      rect,
+      points: pts,
+      raw_ja: '',
+      translated_zh: '',
+      state: 'detected',
+      is_locked: false,
+      layer_z: 0,
+      source: 'manual',
+      shape: 'freehand',
+      cover: true,
+      is_draft: true,
+    }
+    bubbles.push(bubble)
+    sortedIds = sortBubbleIds(bubbles)
+    addDraftPolygon(bubble)
     rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
     countEl.textContent = String(bubbles.length)
     ocrBtn.disabled = false
     inpaintBtn.disabled = false
     selectBubble(bubble.id)
+  }
 
-    // Exit lasso mode after drawing
-    lassoMode = false
-    lassoBtn.classList.remove('active')
-    svg.style.cursor = ''
-    svg.style.pointerEvents = ''
+  function resumeLasso(bubble: MangaBubble): void {
+    // Remove the draft polyline from SVG so the preview takes over
+    svg.querySelector<SVGPolylineElement>(`[data-id="${bubble.id}"]`)?.remove()
+    // Pre-load existing points
+    lassoPoints = bubble.points ? [...bubble.points] : []
+    lassoResumeBubbleId = bubble.id
+    // Recreate preview polyline
+    const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+    poly.classList.add('lasso-preview')
+    if (lassoPoints.length > 0) {
+      poly.setAttribute('points', lassoPoints.map(p => `${p.x},${p.y}`).join(' '))
+    }
+    svg.appendChild(poly)
+    lassoPreviewEl = poly
+    // Enter lasso mode
+    lassoMode = true
+    lassoBtn.classList.add('is-active')
+    svg.style.cursor = 'crosshair'
+    svg.style.pointerEvents = 'all'
+  }
+
+  function finishLassoDraw(): void {
+    lassoDrawing = false
+    lassoPreviewEl?.remove()
+    lassoPreviewEl = null
+
+    const pts = lassoPoints
+    const resumeId = lassoResumeBubbleId
+    lassoPoints = []
+    lassoResumeBubbleId = null
+
+    // Always exit lasso mode here
+    exitLassoMode()
+
+    // Any draw with at least 1 point → save/update draft (user must explicitly finish)
+    if (pts.length > 0) saveDraft(pts, resumeId)
+  }
+
+  function finishDraft(id: string): void {
+    const bubble = bubbles.find(b => b.id === id)
+    if (!bubble || !bubble.is_draft) return
+
+    const pts = bubble.points ?? []
+    if (pts.length < 3) return  // not enough to form a polygon — stay as draft
+
+    const xs = pts.map(p => p.x), ys = pts.map(p => p.y)
+    const minX = Math.min(...xs), maxX = Math.max(...xs)
+    const minY = Math.min(...ys), maxY = Math.max(...ys)
+    if (maxX - minX < 1 || maxY - minY < 1) return  // too tiny — stay as draft
+
+    bubble.rect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    bubble.is_draft = false
+
+    // Swap draft polyline for a real polygon
+    svg.querySelector(`[data-id="${id}"]`)?.remove()
+    addFreehandPolygon(bubble)
+
+    rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
+    selectBubble(id)
   }
 
   // ── Manual box creation ────────────────────────────────────────────────
@@ -1782,7 +2055,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
         const b = bubbles.find(b => b.id === id)
         // Don't cache white — white bubbles should always re-route through the white path,
         // not be forced to the solid route via inpaint_color on subsequent runs.
-        if (b) { b.bubble_rect = rect; if (fillColor && fillColor !== '#ffffff' && b.shape !== 'bubble' && b.shape !== 'freehand') b.inpaint_color = fillColor }
+        if (b) { b.bubble_rect = rect; if (!b.inpaint_color_locked && fillColor && fillColor !== '#ffffff' && b.shape !== 'bubble' && b.shape !== 'freehand') b.inpaint_color = fillColor }
       }
 
       // resultBlob is a transparent PNG overlay — speech bubble text rects are white,

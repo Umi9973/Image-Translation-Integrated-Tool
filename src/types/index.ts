@@ -19,12 +19,14 @@ export interface MangaBubble {
   text_direction?: 'vertical' | 'horizontal'  // default 'vertical'; 'horizontal' renders LTR text
   text_offset_x?: number  // horizontal text position shift (% of image width, + = right)
   text_offset_y?: number  // vertical text position shift (% of image height, + = down)
-  inpaint_color?: string  // hex color override for inpaint fill (e.g. '#f0e8d0'); undefined = auto-detect
+  inpaint_color?: string         // hex color override for inpaint fill (e.g. '#f0e8d0'); undefined = auto-detect
+  inpaint_color_locked?: boolean // true = user manually set the color; prevents auto-detection from overwriting it
   is_background?: boolean // inpaint route override: true = force solid fill, false = force bubble fill, undefined = auto
   rotation?: number       // degrees clockwise; applied to both inpaint fill and typeset text
   text_color?: 'black' | 'white'  // typeset text color; undefined = black
   det_conf?: number         // detection confidence score (debug only)
   det_mask_density?: number // fraction of box pixels flagged as text by heatmap (debug only)
+  is_draft?: boolean        // incomplete freehand lasso — can be resumed or deleted
 }
 
 export interface MangaPage {
