@@ -3,7 +3,7 @@ import type { MangaBubble, MangaPage, BubbleState } from '../types'
 import { detectBubblesWithMask } from '../pipeline/detect'
 import type { DetectionMask } from '../pipeline/detect'
 import { runOCR } from '../pipeline/ocr'
-import { loadAPIConfig, buildPrompt, translatePage, parseTranslationResponse } from '../pipeline/translate'
+import { buildPrompt, parseTranslationResponse } from '../pipeline/translate'
 import { inpaintPage } from '../pipeline/inpaint'
 import { renderTypeset, renderTypesetToCanvas, parseRuby } from '../pipeline/typeset'
 import type { RubySpan } from '../pipeline/typeset'
@@ -746,7 +746,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   root.appendChild(topbar)
 
   topbar.querySelector<HTMLButtonElement>('.ws-settings-btn')!.addEventListener('click', () => {
-    openSettings(() => updateTranslateBtn())
+    openSettings()
   })
 
   topbar.querySelector<HTMLButtonElement>('.ws-new-btn')!.addEventListener('click', () => {
@@ -1016,12 +1016,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   ocrBtn.disabled = true
   controls.appendChild(ocrBtn)
 
-  const translateBtn = document.createElement('button')
-  translateBtn.type = 'button'
-  translateBtn.className = 'ws-translate-btn'
-  translateBtn.textContent = 'Translate All'
-  translateBtn.disabled = true
-  controls.appendChild(translateBtn)
 
   const copyPromptBtn = document.createElement('button')
   copyPromptBtn.type = 'button'
@@ -1503,8 +1497,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   function updateTranslateBtn(): void {
     const hasOcr = bubbles.some(b => b.raw_ja.length > 0)
-    const config = loadAPIConfig()
-    translateBtn.disabled = !hasOcr || config === null
     copyPromptBtn.disabled = !hasOcr
     pasteResponseBtn.disabled = !hasOcr
   }
@@ -1670,40 +1662,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   // ── Translate All button ───────────────────────────────────────────────────
 
-  translateBtn.addEventListener('click', async () => {
-    const config = loadAPIConfig()
-    if (!config) {
-      statusEl.textContent = 'No API key — configure one in Settings'
-      openSettings(() => updateTranslateBtn())
-      return
-    }
-    translateBtn.disabled = true
-    const ocrBubbles = bubbles.filter(b => b.raw_ja.length > 0)
-    statusEl.textContent = 'Translating…'
-    try {
-      const results = await translatePage(
-        ocrBubbles,
-        config.providerId,
-        config.key,
-        stage => { statusEl.textContent = stage },
-        getGlossary(),
-      )
-      for (const { id, translated_zh } of results) {
-        const bubble = bubbles.find(b => b.id === id)
-        if (!bubble) continue
-        bubble.translated_zh = translated_zh
-        bubble.state = 'translated'
-        updateListBadge(listEl, id, bubble.state)
-        if (selectedId === id) selectBubble(id)
-      }
-      statusEl.textContent = `Translated ${results.length} bubbles`
-    } catch (err) {
-      statusEl.textContent = `Translation error: ${String(err).slice(0, 80)}`
-      console.error(err)
-    }
-    updateTranslateBtn()
-    updateTypesetBtn()
-  })
 
   // ── Copy Prompt button ─────────────────────────────────────────────────────
 

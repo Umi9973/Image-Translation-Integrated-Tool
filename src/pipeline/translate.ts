@@ -31,33 +31,6 @@ export const TRANSLATION_PROVIDERS: ProviderDef[] = [
   },
 ]
 
-// ── Config persistence ─────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'mangavibe_api_config'
-
-export interface StoredAPIConfig {
-  providerId: string
-  key: string
-}
-
-export function loadAPIConfig(): StoredAPIConfig | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as StoredAPIConfig) : null
-  } catch {
-    return null
-  }
-}
-
-export function saveAPIConfig(providerId: string, key: string): void {
-  const config: StoredAPIConfig = { providerId, key }
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
-}
-
-export function clearAPIConfig(): void {
-  localStorage.removeItem(STORAGE_KEY)
-}
-
 // ── Prompt building ────────────────────────────────────────────────────────
 
 export function buildPrompt(bubbles: MangaBubble[], glossary?: GlossaryEntry[]): string {
