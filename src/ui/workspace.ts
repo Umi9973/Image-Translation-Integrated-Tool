@@ -738,7 +738,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const topbar = document.createElement('div')
   topbar.className = 'ws-topbar'
   topbar.innerHTML = `
-    <span class="ws-topbar-brand">MangaVibe</span>
+    <span class="ws-topbar-brand">Kalar</span>
     <span class="ws-topbar-filename">${escapeHtml(page.filename)}</span>
     <button type="button" class="ws-settings-btn">⚙ Settings</button>
     <button type="button" class="ws-new-btn">← New Page</button>

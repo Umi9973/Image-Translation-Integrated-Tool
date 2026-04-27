@@ -1,4 +1,4 @@
-# MangaVibe
+# Kalar
 
 ### 🔗 [image-translation-integrated-tool.pages.dev](https://image-translation-integrated-tool.pages.dev)
 
@@ -9,9 +9,9 @@
 
 ## What is this · 这是什么
 
-MangaVibe is a fully client-side tool that takes a raw manga page and produces a translated, typeset version ready to read. Everything runs in your browser — detection, inpainting, OCR, translation, and typesetting all happen locally with no data sent to any server.
+Kalar is a fully client-side tool that takes a raw manga page and produces a translated, typeset version ready to read. Everything runs in your browser — detection, inpainting, OCR, translation, and typesetting all happen locally with no data sent to any server.
 
-MangaVibe 是一款完全在浏览器端运行的漫画翻译工具。上传一张漫画图源，即可得到翻译排版后的成品。OCR、翻译、嵌字全部在本地完成，不上传任何数据到服务器。
+Kalar 是一款完全在浏览器端运行的漫画翻译工具。上传一张漫画图源，即可得到翻译排版后的成品。OCR、翻译、嵌字全部在本地完成，不上传任何数据到服务器。
 
 ---
 

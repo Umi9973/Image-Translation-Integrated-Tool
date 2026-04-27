@@ -6,7 +6,7 @@ export function renderApp(container: HTMLElement): void {
   container.innerHTML = `
     <div class="app">
       <header class="topbar">
-        <span class="logo">MangaVibe</span>
+        <span class="logo">Kalar</span>
         <span class="tagline">Scanlation Studio</span>
       </header>
       <main class="workspace">

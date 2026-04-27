@@ -54,7 +54,7 @@ export function openSettings(): void {
     <li>Click <strong>Copy Prompt</strong> in the toolbar — copies the full translation prompt.</li>
     <li>Open your AI chat below, paste the prompt, and wait for the response.</li>
     <li>Copy the <em>entire</em> response (the JSON array must be included).</li>
-    <li>Back in MangaVibe, click <strong>Paste Response</strong> — translations are applied automatically.</li>
+    <li>Back in Kalar, click <strong>Paste Response</strong> — translations are applied automatically.</li>
   `
   section2.appendChild(steps)
 

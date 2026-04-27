@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import type { Project, MangaPage } from '../types'
 
-const db = new Dexie('MangaVibeDB') as Dexie & {
+const db = new Dexie('KalarDB') as Dexie & {
   projects: EntityTable<Project, 'id'>
   pages: EntityTable<MangaPage, 'id'>
 }

@@ -1,0 +1,4 @@
+1. double bubble的dubg
+2. ui修改
+3. 支持批量处理
+4. 上线
