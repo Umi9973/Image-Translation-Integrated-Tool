@@ -812,6 +812,8 @@ export function renderTypeset(
 
       const bubbleGroup = document.createElementNS(ns, 'g')
       bubbleGroup.setAttribute('data-bubble-id', bubble.id)
+      bubbleGroup.style.pointerEvents = 'all'
+      bubbleGroup.style.cursor = 'grab'
 
       if (bubble.cover) {
         const { rx, ry } = computeRxRy(bw, bh, bubble.shape)
@@ -952,6 +954,8 @@ export function renderTypeset(
     // Wrapper group — lets workspace remove one bubble's typeset by data-bubble-id
     const bubbleGroup = document.createElementNS(ns, 'g')
     bubbleGroup.setAttribute('data-bubble-id', bubble.id)
+    bubbleGroup.style.pointerEvents = 'all'
+    bubbleGroup.style.cursor = 'grab'
 
     if (bubble.cover) {
       const { rx, ry } = computeRxRy(bw, bh, bubble.shape)

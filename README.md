@@ -49,6 +49,9 @@ Upload image → Detect bubbles → Inpaint (remove text) → OCR → Translate 
 - **Non-destructive workflow** — every bubble can be reverted and re-inpainted independently without reprocessing the full page.
 - **非破坏性工作流** — 每个气泡均可独立撤销并重新修复，无需重新处理整页。
 
+- **English / Chinese UI** — a toggle in the topbar switches every label, button, placeholder, badge, and instruction step between English and 中文. Preference is saved across sessions.
+- **中英双语界面** — 顶栏切换按钮可将所有标签、按钮、占位符、状态徽章及说明步骤即时切换为中文或英文，设置跨会话保存。
+
 ---
 
 ## Tech Stack · 技术栈

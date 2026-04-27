@@ -464,3 +464,23 @@ if (b.shape === 'bubble') {
 
 ### General lesson
 Shape-aware fill logic must be applied consistently across **all** fill routes (white, solid, background). Adding it to one route and not others means the fix only works for specific configurations.
+
+---
+
+## Feature — English / Chinese language switcher
+
+**Date:** 2026-04-27
+**Affected files:** `src/i18n/index.ts` (new), `src/ui/workspace.ts`, `src/ui/dict-panel.ts`, `src/ui/settings.ts`, `src/ui/workspace.css`
+
+Added a full EN / 中文 toggle to the topbar. A single `STRINGS` map in `src/i18n/index.ts` holds every UI string keyed by name with both locale variants. `t(key)` returns the current locale's string; `setLocale()` saves to localStorage and fires registered listeners. Static DOM elements use `data-i18n` attributes updated by `applyLocale()`; dynamically-rendered elements (editor panel, bubble list badges, dict panel) are re-rendered in the `onLocaleChange` handler. The toggle is a segmented `[EN][中文]` pill styled in red so it's immediately visible.
+
+---
+
+## Feature — UI polish (2026-04-27)
+
+**Affected files:** `src/ui/workspace.ts`, `src/ui/workspace.css`
+
+- **Text drag always-on**: removed the explicit "Move Text" button; dragging typeset text on the image is now always active. A hint line in the editor panel explains the behaviour.
+- **Delete button always visible**: the × button on each bubble list item is now permanently red (`#fc8181`) instead of appearing only on hover.
+- **Add Box/Round/Freehand sidebar section**: moved shape selection out of the toolbar into the left sidebar as a gradient button with an attached mode pill showing the current shape and a dropdown to switch between Box, Round, and Freehand.
+- **Typeset button colour**: changed from teal to solid purple to match the rest of the action button family.

@@ -9,17 +9,20 @@ import { renderTypeset, renderTypesetToCanvas, parseRuby } from '../pipeline/typ
 import type { RubySpan } from '../pipeline/typeset'
 import { openSettings } from './settings'
 import { renderDictPanel, getGlossary } from './dict-panel'
+import { t, setLocale, getLocale, onLocaleChange, applyLocale } from '../i18n'
+import type { I18nKey } from '../i18n'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const ROW_THRESHOLD = 5 // bubble y-values within 5% are considered the same row
 
-const STATE_LABELS: Record<BubbleState, string> = {
-  detected:   'detected',
-  ocr_done:   'ocr done',
-  translated: 'translated',
-  reviewed:   'reviewed',
+const STATE_KEY: Record<BubbleState, I18nKey> = {
+  detected:   'stateDetected',
+  ocr_done:   'stateOcrDone',
+  translated: 'stateTranslated',
+  reviewed:   'stateReviewed',
 }
+function stateLabel(state: BubbleState): string { return t(STATE_KEY[state]) }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -31,7 +34,7 @@ function truncate(str: string, max: number): string {
 function makeBadge(state: BubbleState, extraClass = ''): HTMLSpanElement {
   const el = document.createElement('span')
   el.className = `ws-badge ws-badge--${state}${extraClass ? ' ' + extraClass : ''}`
-  el.textContent = STATE_LABELS[state]
+  el.textContent = stateLabel(state)
   return el
 }
 
@@ -65,14 +68,14 @@ function updateListBadge(list: HTMLElement, id: string, state: BubbleState): voi
   const el = list.querySelector<HTMLElement>(`[data-badge="${id}"]`)
   if (!el) return
   el.className = `ws-badge ws-badge--${state}`
-  el.textContent = STATE_LABELS[state]
+  el.textContent = stateLabel(state)
 }
 
 function updateEditorBadge(editor: HTMLElement, state: BubbleState): void {
   const el = editor.querySelector<HTMLElement>('.ws-editor-badge')
   if (!el) return
   el.className = `ws-badge ws-badge--${state} ws-editor-badge`
-  el.textContent = STATE_LABELS[state]
+  el.textContent = stateLabel(state)
 }
 
 // ── Editor rendering ──────────────────────────────────────────────────────────
@@ -284,7 +287,7 @@ function renderEditorEmpty(container: HTMLElement): void {
   container.innerHTML = ''
   const el = document.createElement('div')
   el.className = 'ws-editor-empty'
-  el.textContent = 'Select a bubble to edit'
+  el.textContent = t('selectBubbleHint')
   container.appendChild(el)
 }
 
@@ -304,7 +307,7 @@ function renderEditor(
   // JA field
   const jaLabel = document.createElement('div')
   jaLabel.className = 'ws-editor-label'
-  jaLabel.textContent = 'Japanese (raw_ja)'
+  jaLabel.textContent = t('jaLabel')
 
   const jaTextarea = document.createElement('textarea')
   jaTextarea.className = 'ws-editor-textarea'
@@ -316,7 +319,7 @@ function renderEditor(
   // ZH field
   const zhLabel = document.createElement('div')
   zhLabel.className = 'ws-editor-label'
-  zhLabel.textContent = 'Translation (translated_zh)'
+  zhLabel.textContent = t('zhLabel')
 
   const zhTextarea = document.createElement('textarea')
   zhTextarea.className = 'ws-editor-textarea'
@@ -332,7 +335,7 @@ function renderEditor(
   const prevBtn = document.createElement('button')
   prevBtn.type = 'button'
   prevBtn.className = 'ws-nav-btn'
-  prevBtn.textContent = '← Prev'
+  prevBtn.textContent = t('prevBtn')
   prevBtn.disabled = idx === 0
   prevBtn.addEventListener('click', () => callbacks.onNavigate(-1))
 
@@ -343,7 +346,7 @@ function renderEditor(
   const nextBtn = document.createElement('button')
   nextBtn.type = 'button'
   nextBtn.className = 'ws-nav-btn'
-  nextBtn.textContent = 'Next →'
+  nextBtn.textContent = t('nextBtn')
   nextBtn.disabled = idx === total - 1
   nextBtn.addEventListener('click', () => callbacks.onNavigate(1))
 
@@ -360,7 +363,7 @@ function renderEditor(
   const lockBtn = document.createElement('button')
   lockBtn.type = 'button'
   lockBtn.className = 'ws-lock-btn'
-  lockBtn.textContent = locked ? 'Unlock' : 'Lock'
+  lockBtn.textContent = locked ? t('unlockBtn') : t('lockBtn')
   lockBtn.addEventListener('click', () => callbacks.onLockToggle())
 
   actions.appendChild(badge)
@@ -370,7 +373,7 @@ function renderEditor(
     const revertBtn = document.createElement('button')
     revertBtn.type = 'button'
     revertBtn.className = 'ws-revert-inpaint-btn'
-    revertBtn.textContent = 'Revert Inpaint'
+    revertBtn.textContent = t('revertInpaint')
     revertBtn.addEventListener('click', () => callbacks.onRevertInpaint!())
     actions.appendChild(revertBtn)
   }
@@ -379,7 +382,7 @@ function renderEditor(
     const revertBtn = document.createElement('button')
     revertBtn.type = 'button'
     revertBtn.className = 'ws-revert-typeset-btn'
-    revertBtn.textContent = 'Revert Typeset'
+    revertBtn.textContent = t('revertTypeset')
     revertBtn.addEventListener('click', () => callbacks.onRevertTypeset!())
     actions.appendChild(revertBtn)
   }
@@ -395,7 +398,7 @@ function renderEditor(
   coverCheck.checked = bubble.cover ?? false
   coverCheck.addEventListener('change', () => callbacks.onCoverChange(coverCheck.checked))
   coverLabel.appendChild(coverCheck)
-  coverLabel.append(' Cover background')
+  coverLabel.append(t('coverBgLabel'))
 
   const coverControls = document.createElement('div')
   coverControls.className = 'ws-cover-controls'
@@ -403,7 +406,7 @@ function renderEditor(
 
   const coverShapeSelect = document.createElement('select')
   coverShapeSelect.className = 'ws-shape-select'
-  coverShapeSelect.innerHTML = '<option value="rect">Rect</option><option value="bubble">Bubble</option>'
+  coverShapeSelect.innerHTML = `<option value="rect">${t('shapeRect')}</option><option value="bubble">${t('shapeBubble')}</option>`
   coverShapeSelect.value = bubble.shape ?? 'rect'
   coverShapeSelect.addEventListener('change', () =>
     callbacks.onShapeChange(coverShapeSelect.value as 'rect' | 'bubble'))
@@ -415,7 +418,7 @@ function renderEditor(
   outlineCheck.checked = bubble.coverOutline ?? false
   outlineCheck.addEventListener('change', () => callbacks.onOutlineChange(outlineCheck.checked))
   outlineLabel.appendChild(outlineCheck)
-  outlineLabel.append(' Outline')
+  outlineLabel.append(t('outlineLabel'))
 
   coverCheck.addEventListener('change', () => { coverControls.hidden = !coverCheck.checked })
   coverControls.appendChild(coverShapeSelect)
@@ -429,7 +432,7 @@ function renderEditor(
 
   const fontSizeLabel = document.createElement('span')
   fontSizeLabel.className = 'ws-editor-label'
-  fontSizeLabel.textContent = 'Font size'
+  fontSizeLabel.textContent = t('fontSizeLabel')
 
   const fontSizeInput = document.createElement('input')
   fontSizeInput.type = 'number'
@@ -473,7 +476,7 @@ function renderEditor(
   dirCheck.addEventListener('change', () =>
     callbacks.onDirectionChange(dirCheck.checked ? 'horizontal' : 'vertical'))
   dirLabel.appendChild(dirCheck)
-  dirLabel.append(' Horizontal text')
+  dirLabel.append(t('horizontalText'))
 
   // Background text toggle
   const bgLabel = document.createElement('label')
@@ -483,21 +486,21 @@ function renderEditor(
   bgCheck.checked = bubble.is_background === true
   bgCheck.addEventListener('change', () => callbacks.onIsBackgroundChange(bgCheck.checked))
   bgLabel.appendChild(bgCheck)
-  bgLabel.append(' Background text')
+  bgLabel.append(t('backgroundText'))
 
   // Text color selector
   const textColorRow = document.createElement('div')
   textColorRow.className = 'ws-font-size-row'
   const textColorLabel = document.createElement('span')
   textColorLabel.className = 'ws-editor-label'
-  textColorLabel.textContent = 'Text color'
+  textColorLabel.textContent = t('textColorLabel')
   const textColorBlack = document.createElement('button')
   textColorBlack.type = 'button'
-  textColorBlack.textContent = '● Black'
+  textColorBlack.textContent = t('blackBtn')
   textColorBlack.className = 'ws-text-color-btn' + ((!bubble.text_color || bubble.text_color === 'black') ? ' ws-text-color-active' : '')
   const textColorWhite = document.createElement('button')
   textColorWhite.type = 'button'
-  textColorWhite.textContent = '○ White'
+  textColorWhite.textContent = t('whiteBtn')
   textColorWhite.className = 'ws-text-color-btn' + (bubble.text_color === 'white' ? ' ws-text-color-active' : '')
   textColorBlack.addEventListener('click', () => {
     callbacks.onTextColorChange('black')
@@ -519,7 +522,7 @@ function renderEditor(
 
   const rotationLabel = document.createElement('span')
   rotationLabel.className = 'ws-editor-label'
-  rotationLabel.textContent = 'Rotation°'
+  rotationLabel.textContent = t('rotationLabel')
 
   const rotationInput = document.createElement('input')
   rotationInput.type = 'number'
@@ -553,10 +556,14 @@ function renderEditor(
   rotationRow.appendChild(rotationInput)
   rotationRow.appendChild(rotationClearBtn)
 
+  const dragHint = document.createElement('div')
+  dragHint.className = 'ws-drag-hint'
+  dragHint.textContent = t('dragHint')
+
   const resetPosBtn = document.createElement('button')
   resetPosBtn.type = 'button'
   resetPosBtn.className = 'ws-font-size-clear'
-  resetPosBtn.textContent = 'Reset position'
+  resetPosBtn.textContent = t('resetPosition')
   resetPosBtn.title = 'Clear text offset — return text to default centered position'
   resetPosBtn.addEventListener('click', () => {
     bubble.text_offset_x = 0
@@ -587,6 +594,7 @@ function renderEditor(
   editor.appendChild(dirLabel)
   editor.appendChild(bgLabel)
   editor.appendChild(textColorRow)
+  editor.appendChild(dragHint)
   editor.appendChild(resetPosBtn)
   editor.appendChild(coverSection)
   editor.appendChild(nav)
@@ -737,9 +745,20 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   topbar.innerHTML = `
     <span class="ws-topbar-brand">Kalar</span>
     <span style="flex:1"></span>
-    <button type="button" class="ws-settings-btn">⚙ Settings</button>
-    <button type="button" class="ws-new-btn">← New Page</button>
+    <div class="ws-lang-toggle">
+      <button type="button" class="ws-lang-btn" data-lang="en">EN</button>
+      <button type="button" class="ws-lang-btn" data-lang="zh">中文</button>
+    </div>
+    <button type="button" class="ws-settings-btn" data-i18n="settingsBtn"></button>
+    <button type="button" class="ws-new-btn" data-i18n="newPageBtn"></button>
   `
+  applyLocale(topbar)
+  const langBtns = topbar.querySelectorAll<HTMLButtonElement>('.ws-lang-btn')
+  function syncLangBtns() {
+    langBtns.forEach(btn => btn.classList.toggle('is-active', btn.dataset.lang === getLocale()))
+  }
+  syncLangBtns()
+  langBtns.forEach(btn => btn.addEventListener('click', () => setLocale(btn.dataset.lang as 'en' | 'zh')))
   root.appendChild(topbar)
 
   topbar.querySelector<HTMLButtonElement>('.ws-settings-btn')!.addEventListener('click', () => {
@@ -776,7 +795,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const addBoxBtn = document.createElement('button')
   addBoxBtn.type = 'button'
   addBoxBtn.className = 'ws-add-bubble-btn'
-  addBoxBtn.textContent = 'Add Box/Round/Freehand'
+  addBoxBtn.dataset.i18n = 'addBubbleBtn'
+  addBoxBtn.textContent = t('addBubbleBtn')
 
   const addBubbleWrapper = document.createElement('div')
   addBubbleWrapper.className = 'ws-add-bubble-wrapper'
@@ -784,16 +804,16 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const modePill = document.createElement('button')
   modePill.type = 'button'
   modePill.className = 'ws-add-bubble-pill'
-  modePill.innerHTML = '<span class="ws-pill-label">Box</span><span class="ws-pill-arrow">▾</span>'
+  modePill.innerHTML = `<span class="ws-pill-label">${t('boxOption')}</span><span class="ws-pill-arrow">▾</span>`
 
   const addBubbleDropdown = document.createElement('div')
   addBubbleDropdown.className = 'ws-add-bubble-dropdown'
   addBubbleDropdown.hidden = true
 
-  const dropdownItems: { icon: string; iconColor: string; label: string; action: () => void }[] = [
-    { icon: '▭', iconColor: '#63b3ed', label: 'Box',      action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'rect') } },
-    { icon: '◯', iconColor: '#68d391', label: 'Round',    action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'bubble') } },
-    { icon: '✏', iconColor: '#f6ad55', label: 'Freehand', action: () => {
+  const dropdownItems: { icon: string; iconColor: string; labelKey: I18nKey; textSpan?: HTMLSpanElement; action: () => void }[] = [
+    { icon: '▭', iconColor: '#63b3ed', labelKey: 'boxOption',     action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'rect') } },
+    { icon: '◯', iconColor: '#68d391', labelKey: 'roundOption',   action: () => { addManualBubble({ x: 40, y: 40, w: 20, h: 20 }, 'bubble') } },
+    { icon: '✏', iconColor: '#f6ad55', labelKey: 'frehandOption', action: () => {
       lassoMode = true
       lassoBtn.classList.add('is-active')
       svg.style.cursor = 'crosshair'
@@ -811,11 +831,14 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     iconSpan.textContent = item.icon
     iconSpan.style.color = item.iconColor
     iconSpan.style.fontSize = '1rem'
+    const textSpan = document.createElement('span')
+    textSpan.textContent = t(item.labelKey)
+    item.textSpan = textSpan
     opt.appendChild(iconSpan)
-    opt.appendChild(document.createTextNode(item.label))
+    opt.appendChild(textSpan)
     opt.addEventListener('click', () => {
       currentMode = item
-      modePill.querySelector<HTMLSpanElement>('.ws-pill-label')!.textContent = item.label
+      modePill.querySelector<HTMLSpanElement>('.ws-pill-label')!.textContent = t(item.labelKey)
       addBubbleDropdown.hidden = true
     })
     addBubbleDropdown.appendChild(opt)
@@ -860,13 +883,10 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   inpaintCanvas.className = 'ws-inpaint-layer'
   imageFrame.appendChild(inpaintCanvas)
 
-  // Typeset SVG — Chinese text rendered above the inpaint layer
-  // viewBox uses natural image dimensions so font metrics are not distorted
+  // Set layer dimensions once the image natural size is known
   const typesetSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
   typesetSvg.classList.add('ws-typeset-layer')
-  imageFrame.appendChild(typesetSvg)
 
-  // Set layer dimensions once the image natural size is known
   img.addEventListener('load', () => {
     inpaintCanvas.width  = img.naturalWidth
     inpaintCanvas.height = img.naturalHeight
@@ -879,6 +899,12 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   svg.setAttribute('preserveAspectRatio', 'none')
   svg.classList.add('ws-bubble-overlay')
   imageFrame.appendChild(svg)
+
+  // Typeset SVG appended after bubble overlay so text groups sit on top
+  // and can receive drag events without the bubble overlay intercepting them.
+  // pointer-events: none on the SVG itself; individual bubbleGroups get
+  // pointer-events: all in renderTypeset so empty areas still select bubbles.
+  imageFrame.appendChild(typesetSvg)
 
   svg.addEventListener('mousedown', (e) => {
     if (!lassoMode) return
@@ -1051,13 +1077,15 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const detectBtn = document.createElement('button')
   detectBtn.type = 'button'
   detectBtn.className = 'ws-detect-btn'
-  detectBtn.textContent = 'Detect Bubbles'
+  detectBtn.dataset.i18n = 'detectBubbles'
+  detectBtn.textContent = t('detectBubbles')
   controls.appendChild(detectBtn)
 
   const ocrBtn = document.createElement('button')
   ocrBtn.type = 'button'
   ocrBtn.className = 'ws-ocr-btn'
-  ocrBtn.textContent = 'OCR All'
+  ocrBtn.dataset.i18n = 'ocrAll'
+  ocrBtn.textContent = t('ocrAll')
   ocrBtn.disabled = true
   controls.appendChild(ocrBtn)
 
@@ -1065,28 +1093,32 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const copyPromptBtn = document.createElement('button')
   copyPromptBtn.type = 'button'
   copyPromptBtn.className = 'ws-copy-prompt-btn'
-  copyPromptBtn.textContent = 'Copy Prompt'
+  copyPromptBtn.dataset.i18n = 'copyPrompt'
+  copyPromptBtn.textContent = t('copyPrompt')
   copyPromptBtn.disabled = true
   controls.appendChild(copyPromptBtn)
 
   const pasteResponseBtn = document.createElement('button')
   pasteResponseBtn.type = 'button'
   pasteResponseBtn.className = 'ws-paste-btn'
-  pasteResponseBtn.textContent = 'Paste Response'
+  pasteResponseBtn.dataset.i18n = 'pasteResponse'
+  pasteResponseBtn.textContent = t('pasteResponse')
   pasteResponseBtn.disabled = true
   controls.appendChild(pasteResponseBtn)
 
   const inpaintBtn = document.createElement('button')
   inpaintBtn.type = 'button'
   inpaintBtn.className = 'ws-inpaint-btn'
-  inpaintBtn.textContent = 'Inpaint All'
+  inpaintBtn.dataset.i18n = 'inpaintAll'
+  inpaintBtn.textContent = t('inpaintAll')
   inpaintBtn.disabled = true
   controls.appendChild(inpaintBtn)
 
   const revertAllBtn = document.createElement('button')
   revertAllBtn.type = 'button'
   revertAllBtn.className = 'ws-revert-all-btn'
-  revertAllBtn.textContent = 'Revert All Inpaint'
+  revertAllBtn.dataset.i18n = 'revertAllInpaint'
+  revertAllBtn.textContent = t('revertAllInpaint')
   revertAllBtn.title = 'Clear the entire inpaint canvas — restores original pixels everywhere'
   controls.appendChild(revertAllBtn)
 
@@ -1101,36 +1133,22 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const typesetBtn = document.createElement('button')
   typesetBtn.type = 'button'
   typesetBtn.className = 'ws-typeset-btn'
-  typesetBtn.textContent = 'Typeset All'
+  typesetBtn.dataset.i18n = 'typesetAll'
+  typesetBtn.textContent = t('typesetAll')
   typesetBtn.disabled = true
   controls.appendChild(typesetBtn)
 
   const revertAllTypesetBtn = document.createElement('button')
   revertAllTypesetBtn.type = 'button'
   revertAllTypesetBtn.className = 'ws-revert-all-typeset-btn'
-  revertAllTypesetBtn.textContent = 'Revert All Typeset'
+  revertAllTypesetBtn.dataset.i18n = 'revertAllTypeset'
+  revertAllTypesetBtn.textContent = t('revertAllTypeset')
   revertAllTypesetBtn.title = 'Clear all typeset text from the SVG layer'
   controls.appendChild(revertAllTypesetBtn)
 
   revertAllTypesetBtn.addEventListener('click', () => {
     while (typesetSvg.firstChild) typesetSvg.removeChild(typesetSvg.firstChild)
     if (selectedId) selectBubble(selectedId)
-  })
-
-  const moveTextBtn = document.createElement('button')
-  moveTextBtn.type = 'button'
-  moveTextBtn.className = 'ws-move-text-btn'
-  moveTextBtn.textContent = 'Move Text'
-  moveTextBtn.title = 'Click to toggle drag mode — drag text to reposition it within the bubble'
-  controls.appendChild(moveTextBtn)
-
-  let textMoveMode = false
-  moveTextBtn.addEventListener('click', () => {
-    textMoveMode = !textMoveMode
-    moveTextBtn.classList.toggle('is-active', textMoveMode)
-    typesetSvg.style.pointerEvents = textMoveMode ? 'all' : ''
-    svg.style.pointerEvents        = textMoveMode ? 'none' : ''
-    typesetSvg.style.cursor        = textMoveMode ? 'grab' : ''
   })
 
   // ── Text drag ─────────────────────────────────────────────────────────────
@@ -1140,7 +1158,6 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   let dragStartY = 0
 
   typesetSvg.addEventListener('mousedown', (e) => {
-    if (!textMoveMode) return
     let el = e.target as Element | null
     while (el && el !== typesetSvg) {
       if (el.getAttribute('data-bubble-id')) break
@@ -1152,6 +1169,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     dragStartX   = e.clientX
     dragStartY   = e.clientY
     typesetSvg.style.cursor = 'grabbing'
+    svg.style.pointerEvents = 'none'
     e.preventDefault()
   })
 
@@ -1195,7 +1213,8 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
     }
     dragBubbleId = null
     dragGroupEl  = null
-    typesetSvg.style.cursor = 'grab'
+    typesetSvg.style.cursor = ''
+    svg.style.pointerEvents = ''
     if (selectedId) selectBubble(selectedId)
   }
 
@@ -1205,20 +1224,23 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
   const previewBtn = document.createElement('button')
   previewBtn.type = 'button'
   previewBtn.className = 'ws-preview-btn'
-  previewBtn.textContent = 'Preview'
+  previewBtn.dataset.i18n = 'preview'
+  previewBtn.textContent = t('preview')
   previewBtn.title = 'Hide selection overlays to preview typeset output'
   controls.appendChild(previewBtn)
 
   previewBtn.addEventListener('click', () => {
     const on = root.classList.toggle('ws-preview-mode')
-    previewBtn.textContent = on ? 'Exit Preview' : 'Preview'
+    previewBtn.dataset.i18n = on ? 'exitPreview' : 'preview'
+    previewBtn.textContent = on ? t('exitPreview') : t('preview')
     previewBtn.classList.toggle('is-active', on)
   })
 
   const downloadBtn = document.createElement('button')
   downloadBtn.type = 'button'
   downloadBtn.className = 'ws-download-btn'
-  downloadBtn.textContent = '↓ Download'
+  downloadBtn.dataset.i18n = 'download'
+  downloadBtn.textContent = t('download')
   downloadBtn.title = 'Download composited image (original + inpaint layer)'
   controls.appendChild(downloadBtn)
 
@@ -1267,7 +1289,7 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
   const panelHeader = document.createElement('div')
   panelHeader.className = 'ws-panel-header'
-  panelHeader.innerHTML = '<span class="ws-panel-title">Bubbles</span>'
+  panelHeader.innerHTML = `<span class="ws-panel-title" data-i18n="bubblesTitle">${t('bubblesTitle')}</span>`
   const countEl = document.createElement('span')
   countEl.className = 'ws-panel-count'
   countEl.textContent = '0'
@@ -1820,5 +1842,30 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
 
     // Re-render editor so "Revert Typeset" button appears for the selected bubble
     if (selectedId) selectBubble(selectedId)
+  })
+
+  // ── Locale change handler ──────────────────────────────────────────────────
+
+  onLocaleChange(() => {
+    syncLangBtns()
+    // Update all data-i18n elements in the workspace
+    applyLocale(root)
+    // Preview button has dynamic text (not covered by data-i18n when active)
+    const isPreview = root.classList.contains('ws-preview-mode')
+    previewBtn.dataset.i18n = isPreview ? 'exitPreview' : 'preview'
+    previewBtn.textContent = isPreview ? t('exitPreview') : t('preview')
+    // Update dropdown option labels and mode pill
+    for (const item of dropdownItems) {
+      if (item.textSpan) item.textSpan.textContent = t(item.labelKey)
+    }
+    modePill.querySelector<HTMLSpanElement>('.ws-pill-label')!.textContent = t(currentMode.labelKey)
+    // Rebuild bubble list to refresh badge text
+    rebuildBubbleList(bubbles, sortedIds, listEl, selectBubble, deleteBubble)
+    // Re-render editor panel
+    if (selectedId) selectBubble(selectedId)
+    else renderEditorEmpty(editorContainer)
+    // Re-render dict panel (clears and rebuilds with current locale)
+    renderDictPanel(dictPanel)
+    dictPanel.appendChild(addBubbleSection)
   })
 }

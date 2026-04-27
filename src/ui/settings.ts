@@ -1,5 +1,6 @@
 import './settings.css'
 import { TRANSLATION_PROVIDERS } from '../pipeline/translate'
+import { t } from '../i18n'
 
 export function openSettings(): void {
   // Remove any existing modal first
@@ -20,7 +21,7 @@ export function openSettings(): void {
 
   const title = document.createElement('span')
   title.className = 'st-title'
-  title.textContent = 'Settings'
+  title.textContent = t('settingsTitle')
   header.appendChild(title)
 
   const closeBtn = document.createElement('button')
@@ -44,17 +45,17 @@ export function openSettings(): void {
 
   const s2Title = document.createElement('div')
   s2Title.className = 'st-section-title'
-  s2Title.textContent = 'No-Account Mode — Use ChatGPT or DeepSeek Web'
+  s2Title.textContent = t('settingsNoAccount')
   section2.appendChild(s2Title)
 
   const steps = document.createElement('ol')
   steps.className = 'st-steps'
   steps.innerHTML = `
-    <li>Run <strong>OCR All</strong> so every bubble has Japanese text.</li>
-    <li>Click <strong>Copy Prompt</strong> in the toolbar — copies the full translation prompt.</li>
-    <li>Open your AI chat below, paste the prompt, and wait for the response.</li>
-    <li>Copy the <em>entire</em> response (the JSON array must be included).</li>
-    <li>Back in Kalar, click <strong>Paste Response</strong> — translations are applied automatically.</li>
+    <li>${t('settingsStep1')}</li>
+    <li>${t('settingsStep2')}</li>
+    <li>${t('settingsStep3')}</li>
+    <li>${t('settingsStep4')}</li>
+    <li>${t('settingsStep5')}</li>
   `
   section2.appendChild(steps)
 

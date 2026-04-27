@@ -10,6 +10,7 @@
  */
 
 import { addPhraseToParser, resetParser } from '../pipeline/typeset'
+import { t } from '../i18n'
 
 const GLOSSARY_KEY = 'mangavibe_glossary'
 
@@ -45,11 +46,11 @@ export function renderDictPanel(container: HTMLElement): void {
 
   const title = document.createElement('span')
   title.className = 'ws-dict-title'
-  title.textContent = 'Dictionary'
+  title.textContent = t('dictTitle')
 
   const tabSelect = document.createElement('select')
   tabSelect.className = 'ws-shape-select'
-  tabSelect.innerHTML = '<option value="seg">No-Split</option><option value="glossary">Glossary</option>'
+  tabSelect.innerHTML = `<option value="seg">${t('dictTabSeg')}</option><option value="glossary">${t('dictTabGlossary')}</option>`
   tabSelect.addEventListener('change', () => {
     tab = tabSelect.value as DictTab
     rebuildAddRow()
@@ -76,7 +77,7 @@ export function renderDictPanel(container: HTMLElement): void {
       const input = document.createElement('input')
       input.type = 'text'
       input.className = 'ws-dict-input'
-      input.placeholder = 'Keep phrase whole…'
+      input.placeholder = t('dictSegPlaceholder')
 
       const btn = document.createElement('button')
       btn.type = 'button'
@@ -99,12 +100,12 @@ export function renderDictPanel(container: HTMLElement): void {
       const jaInput = document.createElement('input')
       jaInput.type = 'text'
       jaInput.className = 'ws-dict-input ws-dict-input--half'
-      jaInput.placeholder = 'JP term'
+      jaInput.placeholder = t('dictJaPlaceholder')
 
       const zhInput = document.createElement('input')
       zhInput.type = 'text'
       zhInput.className = 'ws-dict-input ws-dict-input--half'
-      zhInput.placeholder = 'ZH override'
+      zhInput.placeholder = t('dictZhPlaceholder')
 
       const btn = document.createElement('button')
       btn.type = 'button'
@@ -137,7 +138,7 @@ export function renderDictPanel(container: HTMLElement): void {
     listEl.innerHTML = ''
     if (tab === 'seg') {
       if (segDict.length === 0) {
-        listEl.appendChild(makeEmpty('No entries — add phrases\nBudouX should never split'))
+        listEl.appendChild(makeEmpty(t('dictEmptySeg')))
         return
       }
       for (const phrase of segDict) {
@@ -154,7 +155,7 @@ export function renderDictPanel(container: HTMLElement): void {
       const resetBtn = document.createElement('button')
       resetBtn.type = 'button'
       resetBtn.className = 'ws-dict-reset-btn'
-      resetBtn.textContent = 'Reset all'
+      resetBtn.textContent = t('dictResetAll')
       resetBtn.addEventListener('click', () => {
         segDict = []
         resetParser()
@@ -163,7 +164,7 @@ export function renderDictPanel(container: HTMLElement): void {
       listEl.appendChild(resetBtn)
     } else {
       if (glossary.length === 0) {
-        listEl.appendChild(makeEmpty('No entries — add JP→ZH\nterm overrides for the LLM'))
+        listEl.appendChild(makeEmpty(t('dictEmptyGlossary')))
         return
       }
       for (const entry of glossary) {
