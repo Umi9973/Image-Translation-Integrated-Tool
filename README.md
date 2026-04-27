@@ -1,5 +1,7 @@
 # MangaVibe
 
+### 🔗 [image-translation-integrated-tool.pages.dev](https://image-translation-integrated-tool.pages.dev)
+
 **Browser-based manga translation pipeline — no server, no install, no cost.**
 **基于浏览器的漫画翻译工具——无需服务器、无需安装、完全免费。**
 
