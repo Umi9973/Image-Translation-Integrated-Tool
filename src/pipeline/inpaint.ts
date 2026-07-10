@@ -85,3 +85,61 @@ export function inpaintPage(
     }
   })
 }
+
+/**
+ * Run AOT-GAN AI Clean on a single bubble.
+ * Sets ml_inpaint_requested=true so the worker routes directly to the AOT path,
+ * bypassing the existing auto-detect logic entirely.
+ *
+ * textMask is required — the button should be disabled when pageMask is null.
+ * If textMask has no pixels in the bubble region the worker will throw.
+ */
+export function inpaintSingleBubbleWithAOT(
+  bubble: MangaBubble,
+  imageBlob: Blob,
+  onProgress?: (stage: string, current: number, total: number) => void,
+  textMask?: DetectionMask | null,
+): Promise<InpaintResult> {
+  return new Promise((resolve, reject) => {
+    const worker = getWorker()
+
+    const handler = (e: MessageEvent) => {
+      const msg = e.data
+      if (msg.type === 'progress') {
+        onProgress?.(msg.stage as string, msg.current as number, msg.total as number)
+      } else if (msg.type === 'debug') {
+        fetch('/__debug/inpaint', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(msg.data) }).catch(() => {})
+      } else if (msg.type === 'done') {
+        worker.removeEventListener('message', handler)
+        resolve({
+          blob: msg.resultBlob as Blob,
+          expandedRects: msg.expandedRects as InpaintResult['expandedRects'],
+        })
+      } else if (msg.type === 'error') {
+        worker.removeEventListener('message', handler)
+        reject(new Error(msg.message as string))
+      }
+    }
+
+    worker.addEventListener('message', handler)
+    const msg: Record<string, unknown> = {
+      type: 'inpaint',
+      imageBlob,
+      bubbles: [{
+        id: bubble.id, rect: bubble.rect, shape: bubble.shape,
+        points: bubble.points, inpaint_color: bubble.inpaint_color,
+        is_background: bubble.is_background, rotation: bubble.rotation,
+        ml_inpaint_requested: true,
+      }],
+    }
+    if (textMask) {
+      const maskCopy = textMask.data.slice()
+      msg.textMask = maskCopy
+      msg.textMaskW = textMask.w
+      msg.textMaskH = textMask.h
+      worker.postMessage(msg, { transfer: [maskCopy.buffer] })
+    } else {
+      worker.postMessage(msg)
+    }
+  })
+}

@@ -80,6 +80,12 @@ const STRINGS = {
   // Inpaint color popup
   inpaintColorLabel:  { en: 'Inpaint Color',  zh: '修复颜色' },
 
+  // AI Clean tool
+  aiCleanBtn:             { en: 'AI Clean',                         zh: 'AI清除' },
+  aiCleanRequiresDetect:  { en: 'Run Detect first',                 zh: '请先运行检测' },
+  aiCleanNoRotation:      { en: 'AI Clean: rotation not supported', zh: 'AI清除不支持旋转' },
+  inpaintAotProgress:     { en: 'AI background reconstruction',     zh: 'AI背景重建' },
+
   // Settings modal
   settingsTitle:      { en: 'Settings',           zh: '设置' },
   settingsNoAccount:  { en: 'No-Account Mode — Use ChatGPT or DeepSeek Web', zh: '无账号模式 — 使用 ChatGPT 或 DeepSeek 网页版' },

@@ -41,7 +41,15 @@ const MODEL_URL     = '/lama_manga_fp32.onnx'
 const OPFS_FILENAME = 'lama_manga_fp32.onnx'
 const LAMA_SIZE       = 512
 const LAMA_CTX_FRAC   = 0.5   // context padding around background text for LaMa (fraction of max(w,h))
-const BG_PADDING      = 8     // px padding around tight text rect for LaMa bounds
+const BG_PADDING      = 8     // px padding around tight text rect
+
+// ── AOT-GAN constants ─────────────────────────────────────────────────────────
+
+const AOT_MODEL_URL = '/aot_places2.onnx'
+const AOT_OPFS_FILE = 'aot_places2.onnx'
+const AOT_SIZE      = 512
+const AOT_CTX_FRAC  = 0.75   // context padding fraction for AOT
+const AOT_DILATION  = 4      // mask dilation radius in context crop space (px)
 
 const TEXT_LUM_THRESH  = 160  // pixels brighter than this inside the bounds are treated as text ink
 const BRIGHT_THRESH    = 200  // luminance above this = bright pixel
@@ -527,10 +535,245 @@ async function inpaintBackground(
   }
 }
 
+// ── AOT-GAN session management ────────────────────────────────────────────────
+
+let aotSession: ort.InferenceSession | null = null
+
+async function downloadAOTModel(): Promise<ArrayBuffer> {
+  const resp = await fetch(AOT_MODEL_URL)
+  if (!resp.ok) throw new Error(`AOT model fetch failed: ${resp.status} ${resp.statusText}`)
+  const contentLength = Number(resp.headers.get('content-length') ?? 0)
+  const reader = resp.body!.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.length
+    if (contentLength > 0) {
+      const pct = Math.round(received / contentLength * 100)
+      post({ type: 'progress', current: received, total: contentLength,
+        stage: `Downloading AOT model… ${pct}% (~43 MB, cached after first run)` })
+    }
+  }
+  const arr = new Uint8Array(received)
+  let off = 0
+  for (const chunk of chunks) { arr.set(chunk, off); off += chunk.length }
+  return arr.buffer
+}
+
+async function loadAOTFromOpfs(): Promise<ArrayBuffer | null> {
+  try {
+    const root = await navigator.storage.getDirectory()
+    const fh = await root.getFileHandle(AOT_OPFS_FILE)
+    return (await fh.getFile()).arrayBuffer()
+  } catch { return null }
+}
+
+async function saveAOTToOpfs(buffer: ArrayBuffer): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory()
+    const fh = await root.getFileHandle(AOT_OPFS_FILE, { create: true })
+    const w = await fh.createWritable()
+    await w.write(buffer)
+    await w.close()
+  } catch { /* OPFS unavailable — skip cache */ }
+}
+
+async function clearAOTOpfsCache(): Promise<void> {
+  try {
+    const root = await navigator.storage.getDirectory()
+    await root.removeEntry(AOT_OPFS_FILE)
+  } catch { /* already gone */ }
+}
+
+async function getAOTSession(): Promise<ort.InferenceSession> {
+  if (aotSession) return aotSession
+
+  post({ type: 'progress', current: 0, total: 1, stage: 'Checking AOT model cache…' })
+  let buffer = await loadAOTFromOpfs()
+
+  if (!buffer) {
+    buffer = await downloadAOTModel()
+    saveAOTToOpfs(buffer)  // fire-and-forget
+  }
+
+  post({ type: 'progress', current: 0, total: 1, stage: 'Loading AOT model into ONNX runtime…' })
+  try {
+    aotSession = await ort.InferenceSession.create(buffer, { executionProviders: ['wasm'] })
+  } catch (err) {
+    await clearAOTOpfsCache()
+    post({ type: 'progress', current: 0, total: 1, stage: 'Cache invalid, re-downloading AOT model…' })
+    buffer = await downloadAOTModel()
+    saveAOTToOpfs(buffer)
+    post({ type: 'progress', current: 0, total: 1, stage: 'Loading AOT model into ONNX runtime…' })
+    aotSession = await ort.InferenceSession.create(buffer, { executionProviders: ['wasm'] })
+  }
+  return aotSession
+}
+
+// ── AOT-GAN inference ─────────────────────────────────────────────────────────
+
+async function runAOT(
+  sess: ort.InferenceSession,
+  imgPixels: Uint8ClampedArray,  // RGBA, AOT_SIZE × AOT_SIZE (letterboxed)
+  maskPixels: Uint8Array,        // 1-ch, AOT_SIZE × AOT_SIZE, 255 = hole
+): Promise<Float32Array> {       // [3, AOT_SIZE, AOT_SIZE] in [-1, 1]
+  const N = AOT_SIZE * AOT_SIZE
+  const data = new Float32Array(4 * N)
+
+  for (let i = 0; i < N; i++) {
+    const mask01  = maskPixels[i] > 128 ? 1.0 : 0.0
+    const rn = (imgPixels[i * 4]     / 127.5) - 1.0
+    const gn = (imgPixels[i * 4 + 1] / 127.5) - 1.0
+    const bn = (imgPixels[i * 4 + 2] / 127.5) - 1.0
+    data[i]           = rn * (1 - mask01)  // masked R
+    data[N + i]       = gn * (1 - mask01)  // masked G
+    data[2 * N + i]   = bn * (1 - mask01)  // masked B
+    data[3 * N + i]   = mask01             // mask
+  }
+
+  const feeds: Record<string, ort.Tensor> = {
+    [sess.inputNames[0]]: new ort.Tensor('float32', data, [1, 4, AOT_SIZE, AOT_SIZE]),
+  }
+  const results = await sess.run(feeds)
+  return results[sess.outputNames[0]].data as Float32Array
+}
+
+// ── Mask dilation ─────────────────────────────────────────────────────────────
+
+function dilateMask(mask: Uint8Array, w: number, h: number, r: number): Uint8Array {
+  const out = new Uint8Array(mask.length)
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (mask[y * w + x] > 0)
+        for (let dy = -r; dy <= r; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            const ny = y + dy, nx = x + dx
+            if (ny >= 0 && ny < h && nx >= 0 && nx < w) out[ny * w + nx] = 255
+          }
+  return out
+}
+
+// ── AOT-GAN inpaint path ──────────────────────────────────────────────────────
+// Letterbox crop, dilate mask, run AOT, reverse letterbox, composite mask>0 only.
+
+async function inpaintWithAOT(
+  sess: ort.InferenceSession,
+  origPixels: Uint8ClampedArray,
+  outData: Uint8ClampedArray,
+  W: number, H: number,
+  tx1: number, ty1: number, tx2: number, ty2: number,
+  textMask: Uint8Array,
+): Promise<void> {
+  // innerBounds: tight text rect + BG_PADDING
+  const innerX1 = Math.max(0, tx1 - BG_PADDING)
+  const innerY1 = Math.max(0, ty1 - BG_PADDING)
+  const innerX2 = Math.min(W, tx2 + BG_PADDING)
+  const innerY2 = Math.min(H, ty2 + BG_PADDING)
+
+  // Context crop: innerBounds + AOT_CTX_FRAC padding
+  const innerW = innerX2 - innerX1
+  const innerH = innerY2 - innerY1
+  const pad    = Math.round(Math.max(innerW, innerH) * AOT_CTX_FRAC)
+  const ctxX1  = Math.max(0, innerX1 - pad)
+  const ctxY1  = Math.max(0, innerY1 - pad)
+  const ctxX2  = Math.min(W, innerX2 + pad)
+  const ctxY2  = Math.min(H, innerY2 + pad)
+  const ctxW   = ctxX2 - ctxX1
+  const ctxH   = ctxY2 - ctxY1
+
+  // Build cropMask from textMask strictly within innerBounds
+  const cropMask = new Uint8Array(ctxW * ctxH)
+  let maskedCount = 0
+  for (let gy = innerY1; gy < innerY2; gy++)
+    for (let gx = innerX1; gx < innerX2; gx++)
+      if (textMask[gy * W + gx] > 0) {
+        cropMask[(gy - ctxY1) * ctxW + (gx - ctxX1)] = 255
+        maskedCount++
+      }
+
+  if (maskedCount === 0)
+    throw new Error('No text mask found in this region — run Detect again')
+
+  // Dilate cropMask in context crop space; same array used for compositing
+  const cropMaskDilated = dilateMask(cropMask, ctxW, ctxH, AOT_DILATION)
+
+  // Letterbox context crop to AOT_SIZE
+  const scale = Math.min(AOT_SIZE / ctxW, AOT_SIZE / ctxH)
+  const newW  = Math.round(ctxW * scale)
+  const newH  = Math.round(ctxH * scale)
+  const padX  = Math.floor((AOT_SIZE - newW) / 2)
+  const padY  = Math.floor((AOT_SIZE - newH) / 2)
+
+  // Image letterbox
+  const lbCanvas = new OffscreenCanvas(AOT_SIZE, AOT_SIZE)
+  const lbCtx    = lbCanvas.getContext('2d')!
+  lbCtx.fillStyle = '#727272'   // rgb(114,114,114) — standard grey pad
+  lbCtx.fillRect(0, 0, AOT_SIZE, AOT_SIZE)
+  const cropImg   = cropPixels(origPixels, W, ctxX1, ctxY1, ctxW, ctxH)
+  const scaledImg = scalePixels(cropImg, ctxW, ctxH, newW, newH)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  lbCtx.putImageData(new ImageData(scaledImg as any, newW, newH), padX, padY)
+  const lbImgData = lbCtx.getImageData(0, 0, AOT_SIZE, AOT_SIZE)
+
+  // Mask letterbox (nearest-neighbour via scalePixels, re-binarize)
+  const maskRgba = new Uint8ClampedArray(ctxW * ctxH * 4)
+  for (let p = 0; p < ctxW * ctxH; p++) {
+    const v = cropMaskDilated[p]
+    maskRgba[p * 4] = maskRgba[p * 4 + 1] = maskRgba[p * 4 + 2] = v
+    maskRgba[p * 4 + 3] = 255
+  }
+  const scaledMaskRgba  = scalePixels(maskRgba, ctxW, ctxH, newW, newH)
+  const lbMaskCanvas    = new OffscreenCanvas(AOT_SIZE, AOT_SIZE)
+  const lbMaskCtx       = lbMaskCanvas.getContext('2d')!
+  lbMaskCtx.fillStyle   = '#000'
+  lbMaskCtx.fillRect(0, 0, AOT_SIZE, AOT_SIZE)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  lbMaskCtx.putImageData(new ImageData(scaledMaskRgba as any, newW, newH), padX, padY)
+  const lbMaskData      = lbMaskCtx.getImageData(0, 0, AOT_SIZE, AOT_SIZE)
+  const lbMask = new Uint8Array(AOT_SIZE * AOT_SIZE)
+  for (let p = 0; p < AOT_SIZE * AOT_SIZE; p++)
+    lbMask[p] = lbMaskData.data[p * 4] > 128 ? 255 : 0
+
+  // Run inference
+  const rawOut = await runAOT(sess, lbImgData.data, lbMask)
+
+  // Output [-1,1] → RGBA
+  const Npx = AOT_SIZE * AOT_SIZE
+  const outRgba = new Uint8ClampedArray(Npx * 4)
+  for (let p = 0; p < Npx; p++) {
+    outRgba[p * 4]     = Math.max(0, Math.min(255, Math.round((rawOut[p]           + 1) / 2 * 255)))
+    outRgba[p * 4 + 1] = Math.max(0, Math.min(255, Math.round((rawOut[Npx + p]     + 1) / 2 * 255)))
+    outRgba[p * 4 + 2] = Math.max(0, Math.min(255, Math.round((rawOut[2 * Npx + p] + 1) / 2 * 255)))
+    outRgba[p * 4 + 3] = 255
+  }
+
+  // Reverse letterbox
+  const croppedOut = cropPixels(outRgba, AOT_SIZE, padX, padY, newW, newH)
+  const result     = scalePixels(croppedOut, newW, newH, ctxW, ctxH)
+
+  // Composite: innerBounds only, dilated mask pixels only — never write outside innerBounds
+  for (let gy = innerY1; gy < innerY2; gy++)
+    for (let gx = innerX1; gx < innerX2; gx++) {
+      const lx = gx - ctxX1
+      const ly = gy - ctxY1
+      if (cropMaskDilated[ly * ctxW + lx] > 0) {
+        const gIdx = (gy * W + gx) * 4
+        const lIdx = (ly * ctxW + lx) * 4
+        outData[gIdx]     = result[lIdx]
+        outData[gIdx + 1] = result[lIdx + 1]
+        outData[gIdx + 2] = result[lIdx + 2]
+        outData[gIdx + 3] = 255
+      }
+    }
+}
+
 // ── Main pass ──────────────────────────────────────────────────────────────────
 
 interface RectPct { x: number; y: number; w: number; h: number }
-interface BubbleMsg { id: string; rect: RectPct; shape?: string; points?: { x: number; y: number }[]; inpaint_color?: string; is_background?: boolean; rotation?: number }
+interface BubbleMsg { id: string; rect: RectPct; shape?: string; points?: { x: number; y: number }[]; inpaint_color?: string; is_background?: boolean; rotation?: number; ml_inpaint_requested?: boolean }
 interface ExpandedRect { id: string; rect: RectPct; fillColor?: string }
 
 // ── Freehand polygon rasterizer ─────────────────────────────────────────────
@@ -584,7 +827,7 @@ async function processAll(
   // Route per bubble: sample 5×5 grid inside the tight text rect.
   // Speech bubble interior is white behind the strokes → high bright ratio → white fill.
   // Background text on artwork has dark/colored background → low bright ratio → LaMa.
-  type Route = 'white' | 'solid' | 'lama'
+  type Route = 'white' | 'solid' | 'lama' | 'aot'
   const dbg: object[] = []
   const solidColors: Map<number, { r: number; g: number; b: number; dilation: number }> = new Map()
   const fullBoxFill = new Set<number>() // bubbles that need full-box solid fill (grey screentone detected)
@@ -595,6 +838,10 @@ async function processAll(
     const ty2 = Math.ceil((b.rect.y + b.rect.h) / 100 * H)
     let route: Route
     let dbgExtra: object = {}
+    if (b.ml_inpaint_requested) {
+      dbg.push({ bubble_no: i + 1, id: b.id, shape: b.shape, route: 'aot', manual_trigger: true, rect_pct: b.rect })
+      return 'aot'
+    }
     if (b.inpaint_color) {
       const hex = b.inpaint_color.replace('#', '')
       const r = parseInt(hex.slice(0, 2), 16)
@@ -716,6 +963,8 @@ async function processAll(
 
   let sess: ort.InferenceSession | null = null
   if (routes.some(r => r === 'lama')) sess = await getSession()
+  let aotSess: ort.InferenceSession | null = null
+  if (routes.some(r => r === 'aot')) aotSess = await getAOTSession()
 
   const expandedRects: ExpandedRect[] = []
 
@@ -984,8 +1233,14 @@ async function processAll(
           }
         }
       }
+    } else if (routes[i] === 'aot') {
+      // ── Background text → AOT-GAN AI Clean (manual trigger only) ──
+      post({ type: 'progress', current: i, total: bubbles.length,
+        stage: `AI background reconstruction ${i + 1}/${bubbles.length}…` })
+      if (!textMask) throw new Error('AI Clean requires Detect to be run first — no text mask available')
+      await inpaintWithAOT(aotSess!, origPixels, outData, W, H, tx1, ty1, tx2, ty2, textMask)
     } else {
-      // ── Background text → LaMa ──
+      // ── Background text → LaMa (dead branch, LAMA_ENABLED = false) ──
       post({ type: 'progress', current: i, total: bubbles.length,
         stage: `Cleaning background text ${i + 1}/${bubbles.length} (LaMa)…` })
       const bounds: [number, number, number, number] = [

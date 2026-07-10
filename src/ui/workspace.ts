@@ -4,7 +4,7 @@ import { detectBubblesWithMask } from '../pipeline/detect'
 import type { DetectionMask } from '../pipeline/detect'
 import { runOCR } from '../pipeline/ocr'
 import { buildPrompt, parseTranslationResponse } from '../pipeline/translate'
-import { inpaintPage } from '../pipeline/inpaint'
+import { inpaintPage, inpaintSingleBubbleWithAOT } from '../pipeline/inpaint'
 import { renderTypeset, renderTypesetToCanvas, parseRuby } from '../pipeline/typeset'
 import type { RubySpan } from '../pipeline/typeset'
 import { openSettings } from './settings'
@@ -104,6 +104,8 @@ interface EditorCallbacks {
   onRotationChange: (deg: number | undefined) => void
   onContinueLasso?: () => void
   onFinishDraft?: () => void
+  onAiClean?: () => void
+  aiCleanDisabled?: string   // if set, button is shown but disabled with this tooltip
 }
 
 // ── Ruby panel ────────────────────────────────────────────────────────────────
@@ -449,6 +451,20 @@ function renderEditor(
     revertBtn.textContent = t('revertTypeset')
     revertBtn.addEventListener('click', () => callbacks.onRevertTypeset!())
     actions.appendChild(revertBtn)
+  }
+
+  {
+    const aiBtn = document.createElement('button')
+    aiBtn.type = 'button'
+    aiBtn.className = 'ws-ai-clean-btn'
+    aiBtn.textContent = t('aiCleanBtn')
+    if (callbacks.aiCleanDisabled) {
+      aiBtn.disabled = true
+      aiBtn.title = callbacks.aiCleanDisabled
+    } else {
+      aiBtn.addEventListener('click', () => callbacks.onAiClean?.())
+    }
+    actions.appendChild(aiBtn)
   }
 
   // Cover section — toggle background fill behind typeset text
@@ -1542,6 +1558,39 @@ export function renderWorkspace(container: HTMLElement, page: MangaPage): void {
       onRotationChange(deg) { bubble.rotation = deg; syncSvgRect(bubble) },
       onContinueLasso: bubble.is_draft ? () => resumeLasso(bubble) : undefined,
       onFinishDraft: bubble.is_draft ? () => finishDraft(id) : undefined,
+      aiCleanDisabled: (() => {
+        if (!pageMask) return t('aiCleanRequiresDetect')
+        if (bubble.rotation !== undefined && bubble.rotation !== 0) return t('aiCleanNoRotation')
+        return undefined
+      })(),
+      onAiClean: (!pageMask || (bubble.rotation !== undefined && bubble.rotation !== 0)) ? undefined : () => {
+        const W = inpaintCanvas.width
+        const H = inpaintCanvas.height
+        const BG_PAD = 8  // must match inpaint.worker.ts BG_PADDING
+        const bx1 = Math.max(0, Math.floor((bubble.rect.x / 100) * W) - BG_PAD)
+        const by1 = Math.max(0, Math.floor((bubble.rect.y / 100) * H) - BG_PAD)
+        const bx2 = Math.min(W, Math.ceil(((bubble.rect.x + bubble.rect.w) / 100) * W) + BG_PAD)
+        const by2 = Math.min(H, Math.ceil(((bubble.rect.y + bubble.rect.h) / 100) * H) + BG_PAD)
+        const bw = bx2 - bx1, bh = by2 - by1
+        const ctx = inpaintCanvas.getContext('2d')!
+        // Save patch so revert works after AI Clean succeeds
+        inpaintPatches.set(id, { data: ctx.getImageData(bx1, by1, bw, bh), x: bx1, y: by1 })
+        statusEl.textContent = 'AI Clean: loading model…'
+        inpaintSingleBubbleWithAOT(bubble, page.imageBlob,
+          (stage, cur, tot) => { statusEl.textContent = `${stage} (${cur}/${tot})` },
+          pageMask,
+        ).then(async ({ blob }) => {
+          const bitmap = await createImageBitmap(blob)
+          ctx.clearRect(bx1, by1, bw, bh)
+          ctx.drawImage(bitmap, bx1, by1, bw, bh, bx1, by1, bw, bh)
+          bitmap.close()
+          statusEl.textContent = 'AI Clean complete'
+          selectBubble(id)   // re-render editor so Revert Inpaint button appears
+        }).catch(err => {
+          statusEl.textContent = `AI Clean error: ${String(err).slice(0, 80)}`
+          console.error('AI Clean failed:', err)
+        })
+      },
     }, computedFontSizes[id])
     syncInpaintPopup()
   }

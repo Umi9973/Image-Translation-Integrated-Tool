@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AOT-GAN Debug Compare</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; font-size: 13px; background: #1a1a1a; color: #ccc; padding: 12px; }
+  h1 { font-size: 16px; color: #eee; margin-bottom: 10px; }
+  .controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  button { background: #333; color: #eee; border: 1px solid #555; padding: 5px 12px; cursor: pointer; font-size: 12px; }
+  button:hover { background: #444; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input[type=file] { color: #ccc; }
+  label { color: #999; }
+  #status { padding: 6px 10px; background: #222; border: 1px solid #444; flex: 1; min-width: 200px; }
+  .panels { display: flex; gap: 8px; flex-wrap: wrap; }
+  .panel { display: flex; flex-direction: column; gap: 4px; }
+  .panel-title { color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  canvas { border: 1px solid #444; display: block; image-rendering: pixelated; }
+  .meta { color: #666; font-size: 11px; min-height: 16px; }
+  .hint { color: #555; font-size: 11px; margin-top: 4px; }
+  #main-canvas { cursor: crosshair; }
+</style>
+</head>
+<body>
+<h1>AOT-GAN Debug Compare — Phase 1 Smoke Test</h1>
+<div class="controls">
+  <input type="file" id="file-picker" accept="image/*">
+  <button id="run-aot" disabled>Run AOT</button>
+  <button id="run-solid" disabled>Run Solid</button>
+  <button id="clear-rect">Clear Rect</button>
+  <span id="status">Load an image to begin</span>
+</div>
+<p class="hint">Draw a rect on the Original canvas over background text, then click Run AOT.</p>
+<p class="hint">Model served from <code>/aot_places2.onnx</code> — start dev server first: <code>npm run dev</code></p>
+<br>
+<div class="panels">
+  <div class="panel">
+    <div class="panel-title">Original (draw rect here)</div>
+    <canvas id="main-canvas" width="512" height="512"></canvas>
+    <div class="meta" id="rect-meta">no rect</div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Solid Fill</div>
+    <canvas id="solid-canvas" width="512" height="512"></canvas>
+    <div class="meta" id="solid-meta"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">AOT Output</div>
+    <canvas id="aot-canvas" width="512" height="512"></canvas>
+    <div class="meta" id="aot-meta"></div>
+  </div>
+  <div class="panel">
+    <div class="panel-title">Mask + Dilation</div>
+    <canvas id="mask-canvas" width="512" height="512"></canvas>
+    <div class="meta" id="mask-meta"></div>
+  </div>
+</div>
+
+<script type="module">
+// ── ORT Web from CDN (same version as production) ──────────────────────────
+import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.2/dist/ort.esm.js'
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.2/dist/'
+
+// ── Constants (must match inpaint.worker.ts) ───────────────────────────────
+const AOT_MODEL_URL = '/aot_places2.onnx'
+const AOT_SIZE      = 512
+const AOT_CTX_FRAC  = 0.75
+const AOT_DILATION  = 4
+const BG_PADDING    = 8
+
+// ── State ──────────────────────────────────────────────────────────────────
+let aotSession = null
+let origImageData = null   // full page RGBA, origW × origH
+let origW = 0, origH = 0
+let dispScale = 1          // original → display (display is always 512-wide)
+let rect = null            // { x1, y1, x2, y2 } in display coords
+let dragging = false, dragStart = null
+
+// ── Elements ───────────────────────────────────────────────────────────────
+const mainCanvas  = document.getElementById('main-canvas')
+const solidCanvas = document.getElementById('solid-canvas')
+const aotCanvas   = document.getElementById('aot-canvas')
+const maskCanvas  = document.getElementById('mask-canvas')
+const mainCtx     = mainCanvas.getContext('2d')
+const solidCtx    = solidCanvas.getContext('2d')
+const aotCtx      = aotCanvas.getContext('2d')
+const maskCtx     = maskCanvas.getContext('2d')
+const runAotBtn   = document.getElementById('run-aot')
+const runSolidBtn = document.getElementById('run-solid')
+const clearBtn    = document.getElementById('clear-rect')
+const status      = document.getElementById('status')
+const rectMeta    = document.getElementById('rect-meta')
+const solidMeta   = document.getElementById('solid-meta')
+const aotMeta     = document.getElementById('aot-meta')
+const maskMeta    = document.getElementById('mask-meta')
+
+function setStatus(msg) { status.textContent = msg }
+
+// ── Image loading ──────────────────────────────────────────────────────────
+document.getElementById('file-picker').addEventListener('change', async (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  setStatus('Loading image…')
+  const bitmap = await createImageBitmap(file)
+  origW = bitmap.width
+  origH = bitmap.height
+
+  // Fit to display: up to 512 wide, preserve aspect
+  const maxDim = 512
+  dispScale = Math.min(maxDim / origW, maxDim / origH, 1)
+  const dispW = Math.round(origW * dispScale)
+  const dispH = Math.round(origH * dispScale)
+
+  for (const canvas of [mainCanvas, solidCanvas, aotCanvas, maskCanvas]) {
+    canvas.width  = dispW
+    canvas.height = dispH
+  }
+
+  // Draw original at display scale and capture full-res pixels separately
+  const srcCanvas = new OffscreenCanvas(origW, origH)
+  srcCanvas.getContext('2d').drawImage(bitmap, 0, 0)
+  origImageData = srcCanvas.getContext('2d').getImageData(0, 0, origW, origH).data
+  bitmap.close()
+
+  mainCtx.drawImage(await createImageBitmap(file), 0, 0, dispW, dispH)
+  setStatus(`Image loaded: ${origW}×${origH} (display: ${dispW}×${dispH}  scale: ${dispScale.toFixed(3)})`)
+  rect = null; rectMeta.textContent = 'no rect'
+  runAotBtn.disabled = false
+  runSolidBtn.disabled = false
+})
+
+// ── Rect drawing ───────────────────────────────────────────────────────────
+function drawOverlay() {
+  // Redraw image at display scale
+  const dispW = mainCanvas.width, dispH = mainCanvas.height
+  const offsc = new OffscreenCanvas(origW, origH)
+  offsc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(origImageData.buffer), origW, origH), 0, 0)
+  mainCtx.drawImage(offsc, 0, 0, dispW, dispH)
+
+  if (rect) {
+    const { x1, y1, x2, y2 } = rect
+    mainCtx.strokeStyle = 'rgba(255,80,80,0.9)'
+    mainCtx.lineWidth = 1.5
+    mainCtx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+    mainCtx.fillStyle = 'rgba(255,80,80,0.08)'
+    mainCtx.fillRect(x1, y1, x2 - x1, y2 - y1)
+
+    // Show innerBounds (+ BG_PADDING) in blue
+    const inner = toOrigRect(rect)
+    const ix1d = Math.round((inner.x1 - BG_PADDING) * dispScale)
+    const iy1d = Math.round((inner.y1 - BG_PADDING) * dispScale)
+    const ix2d = Math.round((inner.x2 + BG_PADDING) * dispScale)
+    const iy2d = Math.round((inner.y2 + BG_PADDING) * dispScale)
+    mainCtx.strokeStyle = 'rgba(80,160,255,0.6)'
+    mainCtx.lineWidth = 1
+    mainCtx.strokeRect(ix1d, iy1d, ix2d - ix1d, iy2d - iy1d)
+
+    const or = inner
+    rectMeta.textContent = `orig: (${or.x1},${or.y1})-(${or.x2},${or.y2})  size: ${or.x2-or.x1}×${or.y2-or.y1}`
+  }
+}
+
+mainCanvas.addEventListener('mousedown', (e) => {
+  const r = mainCanvas.getBoundingClientRect()
+  dragStart = { x: e.clientX - r.left, y: e.clientY - r.top }
+  dragging = true
+})
+mainCanvas.addEventListener('mousemove', (e) => {
+  if (!dragging) return
+  const r = mainCanvas.getBoundingClientRect()
+  const x = e.clientX - r.left, y = e.clientY - r.top
+  rect = {
+    x1: Math.min(dragStart.x, x), y1: Math.min(dragStart.y, y),
+    x2: Math.max(dragStart.x, x), y2: Math.max(dragStart.y, y),
+  }
+  drawOverlay()
+})
+mainCanvas.addEventListener('mouseup', () => { dragging = false })
+clearBtn.addEventListener('click', () => { rect = null; rectMeta.textContent = 'no rect'; drawOverlay() })
+
+function toOrigRect(r) {
+  return {
+    x1: Math.max(0, Math.round(r.x1 / dispScale)),
+    y1: Math.max(0, Math.round(r.y1 / dispScale)),
+    x2: Math.min(origW, Math.round(r.x2 / dispScale)),
+    y2: Math.min(origH, Math.round(r.y2 / dispScale)),
+  }
+}
+
+// ── Pixel helpers ──────────────────────────────────────────────────────────
+function cropPixels(src, W, x, y, w, h) {
+  const out = new Uint8ClampedArray(w * h * 4)
+  for (let row = 0; row < h; row++)
+    out.set(src.subarray(((y + row) * W + x) * 4, ((y + row) * W + x + w) * 4), row * w * 4)
+  return out
+}
+
+function scalePixels(pixels, srcW, srcH, dstW, dstH) {
+  const sc = new OffscreenCanvas(srcW, srcH)
+  sc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels.buffer ?? pixels), srcW, srcH), 0, 0)
+  const dc = new OffscreenCanvas(dstW, dstH)
+  dc.getContext('2d').drawImage(sc, 0, 0, dstW, dstH)
+  return dc.getContext('2d').getImageData(0, 0, dstW, dstH).data
+}
+
+function dilateMask(mask, w, h, r) {
+  const out = new Uint8Array(mask.length)
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (mask[y * w + x] > 0)
+        for (let dy = -r; dy <= r; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            const ny = y + dy, nx = x + dx
+            if (ny >= 0 && ny < h && nx >= 0 && nx < w) out[ny * w + nx] = 255
+          }
+  return out
+}
+
+// ── Solid fill (debug baseline) ────────────────────────────────────────────
+runSolidBtn.addEventListener('click', () => {
+  if (!rect || !origImageData) return
+  const or = toOrigRect(rect)
+  const tx1 = or.x1, ty1 = or.y1, tx2 = or.x2, ty2 = or.y2
+  const innerX1 = Math.max(0, tx1 - BG_PADDING), innerY1 = Math.max(0, ty1 - BG_PADDING)
+  const innerX2 = Math.min(origW, tx2 + BG_PADDING), innerY2 = Math.min(origH, ty2 + BG_PADDING)
+  const bw = innerX2 - innerX1, bh = innerY2 - innerY1
+  if (bw <= 0 || bh <= 0) return
+
+  // Sample mean color of the outer ring
+  let R = 0, G = 0, B = 0, N = 0
+  const RING = 12
+  for (let y = Math.max(0, innerY1 - RING); y < Math.min(origH, innerY2 + RING); y++)
+    for (let x = Math.max(0, innerX1 - RING); x < Math.min(origW, innerX2 + RING); x++) {
+      if (x >= innerX1 && x < innerX2 && y >= innerY1 && y < innerY2) continue
+      const p = (y * origW + x) * 4
+      R += origImageData[p]; G += origImageData[p+1]; B += origImageData[p+2]; N++
+    }
+  const r = N > 0 ? Math.round(R/N) : 128
+  const g = N > 0 ? Math.round(G/N) : 128
+  const b = N > 0 ? Math.round(B/N) : 128
+
+  // Fill on display
+  const dispW = solidCanvas.width, dispH = solidCanvas.height
+  const offsc = new OffscreenCanvas(origW, origH)
+  offsc.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(origImageData.buffer), origW, origH), 0, 0)
+  solidCtx.drawImage(offsc, 0, 0, dispW, dispH)
+  solidCtx.fillStyle = `rgb(${r},${g},${b})`
+  solidCtx.fillRect(
+    Math.round(innerX1 * dispScale), Math.round(innerY1 * dispScale),
+    Math.round(bw * dispScale), Math.round(bh * dispScale),
+  )
+  solidMeta.textContent = `fill: rgb(${r},${g},${b})`
+})
+
+// ── AOT inference ──────────────────────────────────────────────────────────
+async function loadAOT() {
+  if (aotSession) return aotSession
+  setStatus('Loading AOT model from /aot_places2.onnx …')
+  const t0 = performance.now()
+  const resp = await fetch(AOT_MODEL_URL)
+  if (!resp.ok) throw new Error(`Model fetch failed: ${resp.status} ${resp.statusText}`)
+  const buf = await resp.arrayBuffer()
+  setStatus(`Model downloaded (${(buf.byteLength / 1024 / 1024).toFixed(1)} MB), creating ORT session…`)
+  aotSession = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] })
+  const elapsed = ((performance.now() - t0) / 1000).toFixed(1)
+  setStatus(`AOT model loaded in ${elapsed}s — inputs: ${aotSession.inputNames}  outputs: ${aotSession.outputNames}`)
+  return aotSession
+}
+
+runAotBtn.addEventListener('click', async () => {
+  if (!rect || !origImageData) { setStatus('ERROR: Draw a rect first'); return }
+  runAotBtn.disabled = true
+  const t0 = performance.now()
+
+  try {
+    const sess = await loadAOT()
+    const or = toOrigRect(rect)
+    const tx1 = or.x1, ty1 = or.y1, tx2 = or.x2, ty2 = or.y2
+
+    // innerBounds
+    const innerX1 = Math.max(0, tx1 - BG_PADDING), innerY1 = Math.max(0, ty1 - BG_PADDING)
+    const innerX2 = Math.min(origW, tx2 + BG_PADDING), innerY2 = Math.min(origH, ty2 + BG_PADDING)
+
+    // Context crop bounds
+    const innerW = innerX2 - innerX1, innerH = innerY2 - innerY1
+    const pad    = Math.round(Math.max(innerW, innerH) * AOT_CTX_FRAC)
+    const ctxX1  = Math.max(0, innerX1 - pad), ctxY1  = Math.max(0, innerY1 - pad)
+    const ctxX2  = Math.min(origW, innerX2 + pad), ctxY2  = Math.min(origH, innerY2 + pad)
+    const ctxW   = ctxX2 - ctxX1, ctxH = ctxY2 - ctxY1
+
+    // Build cropMask: luminance-threshold within innerBounds (no textMask here)
+    const TEXT_LUM = 160
+    const cropMask = new Uint8Array(ctxW * ctxH)
+    let maskedCount = 0
+    for (let gy = innerY1; gy < innerY2; gy++)
+      for (let gx = innerX1; gx < innerX2; gx++) {
+        const p = (gy * origW + gx) * 4
+        const lum = origImageData[p]*0.299 + origImageData[p+1]*0.587 + origImageData[p+2]*0.114
+        if (lum > TEXT_LUM) { cropMask[(gy - ctxY1) * ctxW + (gx - ctxX1)] = 255; maskedCount++ }
+      }
+    // Fallback: if mask too sparse, fill entire innerBounds (debug page only)
+    if (maskedCount < (innerW * innerH) * 0.005) {
+      for (let gy = innerY1; gy < innerY2; gy++)
+        for (let gx = innerX1; gx < innerX2; gx++)
+          cropMask[(gy - ctxY1) * ctxW + (gx - ctxX1)] = 255
+      maskedCount = innerW * innerH
+    }
+
+    // Dilate
+    const cropMaskDilated = dilateMask(cropMask, ctxW, ctxH, AOT_DILATION)
+    const dilatedCount = cropMaskDilated.reduce((s, v) => s + (v > 0 ? 1 : 0), 0)
+
+    // Show mask in mask panel
+    const maskRgbaDisp = new Uint8ClampedArray(ctxW * ctxH * 4)
+    for (let p = 0; p < ctxW * ctxH; p++) {
+      const raw = cropMask[p] > 0 ? 200 : 0
+      const dil = cropMaskDilated[p] > 0 && cropMask[p] === 0 ? 80 : 0
+      maskRgbaDisp[p*4]   = raw || dil
+      maskRgbaDisp[p*4+1] = raw
+      maskRgbaDisp[p*4+2] = dil
+      maskRgbaDisp[p*4+3] = 255
+    }
+    const maskDispW = maskCanvas.width, maskDispH = maskCanvas.height
+    const dispCtxW = Math.round(ctxW * dispScale), dispCtxH = Math.round(ctxH * dispScale)
+    const scaledMaskDisp = scalePixels(maskRgbaDisp, ctxW, ctxH, dispCtxW, dispCtxH)
+    maskCtx.clearRect(0, 0, maskDispW, maskDispH)
+    maskCtx.putImageData(new ImageData(new Uint8ClampedArray(scaledMaskDisp.buffer), dispCtxW, dispCtxH),
+      Math.round(ctxX1 * dispScale), Math.round(ctxY1 * dispScale))
+    maskMeta.textContent = `mask: ${maskedCount}px  dilated: ${dilatedCount}px  ctx: ${ctxW}×${ctxH}`
+
+    // Letterbox
+    const scale = Math.min(AOT_SIZE / ctxW, AOT_SIZE / ctxH)
+    const newW  = Math.round(ctxW * scale), newH = Math.round(ctxH * scale)
+    const padX  = Math.floor((AOT_SIZE - newW) / 2), padY = Math.floor((AOT_SIZE - newH) / 2)
+
+    const lbCanvas = new OffscreenCanvas(AOT_SIZE, AOT_SIZE)
+    const lbCtx    = lbCanvas.getContext('2d')
+    lbCtx.fillStyle = '#727272'
+    lbCtx.fillRect(0, 0, AOT_SIZE, AOT_SIZE)
+    const cropImg   = cropPixels(origImageData, origW, ctxX1, ctxY1, ctxW, ctxH)
+    const scaledImg = scalePixels(cropImg, ctxW, ctxH, newW, newH)
+    lbCtx.putImageData(new ImageData(new Uint8ClampedArray(scaledImg.buffer), newW, newH), padX, padY)
+    const lbImgData = lbCtx.getImageData(0, 0, AOT_SIZE, AOT_SIZE)
+
+    const maskRgba = new Uint8ClampedArray(ctxW * ctxH * 4)
+    for (let p = 0; p < ctxW * ctxH; p++) {
+      const v = cropMaskDilated[p]
+      maskRgba[p*4] = maskRgba[p*4+1] = maskRgba[p*4+2] = v; maskRgba[p*4+3] = 255
+    }
+    const scaledMaskRgba = scalePixels(maskRgba, ctxW, ctxH, newW, newH)
+    const lbMaskCanvas = new OffscreenCanvas(AOT_SIZE, AOT_SIZE)
+    const lbMaskCtx    = lbMaskCanvas.getContext('2d')
+    lbMaskCtx.fillStyle = '#000'
+    lbMaskCtx.fillRect(0, 0, AOT_SIZE, AOT_SIZE)
+    lbMaskCtx.putImageData(new ImageData(new Uint8ClampedArray(scaledMaskRgba.buffer), newW, newH), padX, padY)
+    const lbMaskData = lbMaskCtx.getImageData(0, 0, AOT_SIZE, AOT_SIZE)
+    const lbMask = new Uint8Array(AOT_SIZE * AOT_SIZE)
+    for (let p = 0; p < AOT_SIZE * AOT_SIZE; p++)
+      lbMask[p] = lbMaskData.data[p * 4] > 128 ? 255 : 0
+
+    // Build tensor: [1, 4, 512, 512] = [masked_R, masked_G, masked_B, mask]
+    const N = AOT_SIZE * AOT_SIZE
+    const tensorData = new Float32Array(4 * N)
+    for (let i = 0; i < N; i++) {
+      const mask01 = lbMask[i] > 128 ? 1.0 : 0.0
+      tensorData[i]         = ((lbImgData.data[i*4]   / 127.5) - 1.0) * (1 - mask01)
+      tensorData[N + i]     = ((lbImgData.data[i*4+1] / 127.5) - 1.0) * (1 - mask01)
+      tensorData[2 * N + i] = ((lbImgData.data[i*4+2] / 127.5) - 1.0) * (1 - mask01)
+      tensorData[3 * N + i] = mask01
+    }
+
+    setStatus('Running AOT inference…')
+    const tInf = performance.now()
+    const feeds = { [sess.inputNames[0]]: new ort.Tensor('float32', tensorData, [1, 4, AOT_SIZE, AOT_SIZE]) }
+    const results  = await sess.run(feeds)
+    const rawOut   = results[sess.outputNames[0]].data
+    const infTime  = ((performance.now() - tInf) / 1000).toFixed(2)
+
+    // Output [-1,1] → RGBA
+    const outRgba = new Uint8ClampedArray(N * 4)
+    for (let p = 0; p < N; p++) {
+      outRgba[p*4]   = Math.max(0, Math.min(255, Math.round((rawOut[p]         + 1) / 2 * 255)))
+      outRgba[p*4+1] = Math.max(0, Math.min(255, Math.round((rawOut[N + p]     + 1) / 2 * 255)))
+      outRgba[p*4+2] = Math.max(0, Math.min(255, Math.round((rawOut[2*N + p]   + 1) / 2 * 255)))
+      outRgba[p*4+3] = 255
+    }
+
+    // Reverse letterbox
+    const croppedOut = cropPixels(outRgba, AOT_SIZE, padX, padY, newW, newH)
+    const result     = scalePixels(croppedOut, newW, newH, ctxW, ctxH)
+
+    // Draw result on AOT canvas: start with original, composite only masked pixels
+    const dispW = aotCanvas.width, dispH = aotCanvas.height
+    const offsc = new OffscreenCanvas(origW, origH)
+    const offCtx = offsc.getContext('2d')
+    offCtx.putImageData(new ImageData(new Uint8ClampedArray(origImageData.buffer), origW, origH), 0, 0)
+
+    // Composite masked pixels into the result image
+    const resultImgData = new Uint8ClampedArray(origW * origH * 4)
+    resultImgData.set(origImageData)
+    for (let gy = innerY1; gy < innerY2; gy++)
+      for (let gx = innerX1; gx < innerX2; gx++) {
+        const lx = gx - ctxX1, ly = gy - ctxY1
+        if (cropMaskDilated[ly * ctxW + lx] > 0) {
+          const gIdx = (gy * origW + gx) * 4
+          const lIdx = (ly * ctxW + lx) * 4
+          resultImgData[gIdx]   = result[lIdx]
+          resultImgData[gIdx+1] = result[lIdx+1]
+          resultImgData[gIdx+2] = result[lIdx+2]
+          resultImgData[gIdx+3] = 255
+        }
+      }
+
+    const resultOffsc = new OffscreenCanvas(origW, origH)
+    resultOffsc.getContext('2d').putImageData(new ImageData(resultImgData, origW, origH), 0, 0)
+    aotCtx.drawImage(resultOffsc, 0, 0, dispW, dispH)
+
+    const totalTime = ((performance.now() - t0) / 1000).toFixed(1)
+    aotMeta.textContent = `inference: ${infTime}s  total: ${totalTime}s`
+    setStatus(`AOT complete — inference ${infTime}s, total ${totalTime}s`)
+  } catch (err) {
+    setStatus(`ERROR: ${err.message}`)
+    console.error(err)
+  } finally {
+    runAotBtn.disabled = false
+  }
+})
+</script>
+</body>
+</html>
