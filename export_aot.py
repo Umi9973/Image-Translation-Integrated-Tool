@@ -11,8 +11,11 @@ After export, validate with:
 
 Expected output:
   Input:  image_mask  [1, 4, 512, 512]  float32
-           Ch 0-2: masked image (RGB normalized to [-1,1], hole pixels = 0)
-           Ch 3:   binary mask (1.0 = hole/text, 0.0 = keep)
+           Ch 0-2: masked image (RGB normalized to [-1,1])
+                   Computed as: image * (1 - mask) + mask
+                   → at hole pixels (mask=1): value = 1.0 (white in [-1,1] space)
+                   → at keep pixels (mask=0): value = original pixel in [-1,1]
+           Ch 3:   binary mask (1.0 = hole/text to remove, 0.0 = keep)
   Output: output      [1, 3, 512, 512]  float32 in [-1, 1]
   Convert: out_uint8 = clamp((output + 1) / 2 * 255, 0, 255)
 """
@@ -191,7 +194,7 @@ def main() -> None:
         if out_arr.max() > 1.1 or out_arr.min() < -1.1:
             print(f'  WARNING: Output range outside [-1, 1] — check normalization')
         else:
-            print('  Output range is within [-1, 1] ✓')
+            print('  Output range is within [-1, 1] OK')
     except ImportError:
         print('onnxruntime not installed — skipping ORT verification (pip install onnxruntime)')
 

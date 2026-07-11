@@ -3,6 +3,9 @@ dist/
 .venv/
 *.local
 public/*.onnx
+models/
+debug/
+AOT-GAN-for-Inpainting/
 *-debug.json
 可以加的功能.txt
 接下来要做的.txt

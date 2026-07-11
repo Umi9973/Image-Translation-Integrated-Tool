@@ -623,15 +623,19 @@ async function runAOT(
   const N = AOT_SIZE * AOT_SIZE
   const data = new Float32Array(4 * N)
 
+  // Preprocessing matches official test.py line 44:
+  //   image_masked = image * (1 - mask) + mask
+  // image RGB normalized to [-1, 1]; mask 0/1 (1=hole).
+  // At hole pixels: masked = 0 + 1 = 1.0 (white in [-1,1]), NOT 0.
   for (let i = 0; i < N; i++) {
     const mask01  = maskPixels[i] > 128 ? 1.0 : 0.0
     const rn = (imgPixels[i * 4]     / 127.5) - 1.0
     const gn = (imgPixels[i * 4 + 1] / 127.5) - 1.0
     const bn = (imgPixels[i * 4 + 2] / 127.5) - 1.0
-    data[i]           = rn * (1 - mask01)  // masked R
-    data[N + i]       = gn * (1 - mask01)  // masked G
-    data[2 * N + i]   = bn * (1 - mask01)  // masked B
-    data[3 * N + i]   = mask01             // mask
+    data[i]           = rn * (1 - mask01) + mask01  // masked R: 1.0 at holes
+    data[N + i]       = gn * (1 - mask01) + mask01  // masked G: 1.0 at holes
+    data[2 * N + i]   = bn * (1 - mask01) + mask01  // masked B: 1.0 at holes
+    data[3 * N + i]   = mask01                       // mask channel
   }
 
   const feeds: Record<string, ort.Tensor> = {
